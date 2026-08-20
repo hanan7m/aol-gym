@@ -9,9 +9,66 @@ const state = {
   bookedClassIds: new Set(['c1','c4']),
   ticketDraft: { category: 'فني', subject: '', message: '' },
   toastTimer: null,
+  deferredInstallPrompt: null,   // حدث تثبيت PWA (Android/Chrome/Edge) بانتظار الاستخدام
+  installBannerDismissed: false,
+  isStandalone: window.matchMedia && window.matchMedia('(display-mode: standalone)').matches,
 };
 
 const $app = document.getElementById('app');
+
+// ---------------------------------------------------------
+// تثبيت التطبيق (PWA) — التقاط حدث المتصفح وعرض زر تثبيت مخصص
+// ---------------------------------------------------------
+const isIOS = /iphone|ipad|ipod/i.test(navigator.userAgent) && !window.MSStream;
+
+window.addEventListener('beforeinstallprompt', (e) => {
+  e.preventDefault();
+  state.deferredInstallPrompt = e;
+  render();
+});
+
+window.addEventListener('appinstalled', () => {
+  state.deferredInstallPrompt = null;
+  state.isStandalone = true;
+  toast('تم تثبيت التطبيق بنجاح ✔');
+  render();
+});
+
+function installApp(){
+  if (!state.deferredInstallPrompt) return;
+  state.deferredInstallPrompt.prompt();
+  state.deferredInstallPrompt.userChoice.finally(() => {
+    state.deferredInstallPrompt = null;
+    render();
+  });
+}
+window.installApp = installApp;
+
+function dismissInstallBanner(){
+  state.installBannerDismissed = true;
+  render();
+}
+window.dismissInstallBanner = dismissInstallBanner;
+
+function installBanner(){
+  if (state.isStandalone || state.installBannerDismissed) return '';
+  if (state.deferredInstallPrompt) {
+    return `<div class="install-banner">
+      <span class="install-banner-icon">${icon('download')}</span>
+      <span class="install-banner-text"><b>ثبّتي تطبيق AOL GYM</b><span>وصول أسرع من الشاشة الرئيسية مباشرة</span></span>
+      <button class="install-banner-btn" onclick="installApp()">تثبيت</button>
+      <button class="install-banner-x" onclick="dismissInstallBanner()">${icon('x')}</button>
+    </div>`;
+  }
+  if (isIOS) {
+    return `<div class="install-banner install-banner-ios">
+      <span class="install-banner-icon">${icon('download')}</span>
+      <span class="install-banner-text"><b>ثبّتي التطبيق على آيفون</b><span>اضغطي زر المشاركة <b>⬆️</b> ثم "إضافة إلى الشاشة الرئيسية"</span></span>
+      <button class="install-banner-x" onclick="dismissInstallBanner()">${icon('x')}</button>
+    </div>`;
+  }
+  return '';
+}
 
 function fmtMoney(n){ return n.toLocaleString('ar-SA') + ' ر.س'; }
 
@@ -983,6 +1040,7 @@ function render(){
   $app.innerHTML = `
     <div class="phone-screen">
       ${statusBar()}
+      ${installBanner()}
       <div class="screen-body">
         ${screenFn()}
       </div>
