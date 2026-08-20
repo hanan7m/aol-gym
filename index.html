@@ -1,0 +1,48 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, viewport-fit=cover" />
+<title>AOL GYM — تطبيق صالة أكاديمية التعلم</title>
+
+<!-- PWA: manifest + أيقونات + لون الواجهة -->
+<link rel="manifest" href="manifest.json" />
+<meta name="theme-color" content="#166fac" />
+<meta name="mobile-web-app-capable" content="yes" />
+<meta name="apple-mobile-web-app-capable" content="yes" />
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+<meta name="apple-mobile-web-app-title" content="AOL GYM" />
+<link rel="icon" href="icons/icon-192.png" />
+<link rel="apple-touch-icon" href="icons/apple-touch-icon.png" />
+
+<link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <div class="stage">
+    <div class="stage-intro">
+      <img src="logo.png" alt="أكاديمية التعلم" style="width:120px; margin-bottom:14px;" />
+      <h1>AOL GYM</h1>
+      <p>نموذج أولي تفاعلي شامل لتطبيق صالة أكاديمية التعلم الرياضية، مبني مباشرة على مستند المتطلبات الذي رفعته. التطبيق متاح مجاناً لجميع المتدربين والطاقم الإداري بالكامل — بدون أي رسوم اشتراك. جرّب الحسابات الثلاثة أدناه لاستكشاف كل الأدوار.</p>
+      <div class="role-pills">
+        <div class="role-pill">👤 <span><b>متدرب</b> — الملف الشخصي، الحجز، العضوية، QR</span></div>
+        <div class="role-pill">🏋️ <span><b>مدرب</b> — الجدول، المتدربون، التقييمات</span></div>
+        <div class="role-pill">🛡️ <span><b>إدارة</b> — الكلاسات، التقارير، الدعم، الصلاحيات</span></div>
+      </div>
+    </div>
+    <div class="phone" id="app"></div>
+  </div>
+  <script src="icons.js"></script>
+  <script src="logo.js"></script>
+  <script src="data.js"></script>
+  <script src="app.js"></script>
+  <script>
+    // تسجيل الـ Service Worker — يفعّل وضع PWA (تثبيت + عمل جزئي بدون إنترنت)
+    // يعمل فقط عند الاستضافة على رابط https (أو localhost)، ويُتجاهل بأمان إن فُتح الملف مباشرة (file://)
+    if ('serviceWorker' in navigator && (location.protocol === 'https:' || location.hostname === 'localhost')) {
+      window.addEventListener('load', () => {
+        navigator.serviceWorker.register('./service-worker.js').catch(() => {});
+      });
+    }
+  </script>
+</body>
+</html>
