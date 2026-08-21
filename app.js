@@ -12,6 +12,7 @@ const state = {
   deferredInstallPrompt: null,   // حدث تثبيت PWA (Android/Chrome/Edge) بانتظار الاستخدام
   installBannerDismissed: false,
   isStandalone: window.matchMedia && window.matchMedia('(display-mode: standalone)').matches,
+  pendingApprovals: null,
 };
 
 const $app = document.getElementById('app');
@@ -126,6 +127,7 @@ state.authUser = null;
 state.authProfile = null;
 state.authBusy = false;
 state.authMode = 'signin'; // 'signin' | 'signup'
+state.authCategory = 'trainee'; // 'trainee' | 'staff'
 state.authError = '';
 
 function setAuthMode(mode){
@@ -134,6 +136,21 @@ function setAuthMode(mode){
   render();
 }
 window.setAuthMode = setAuthMode;
+
+function setAuthCategory(cat){
+  state.authCategory = cat;
+  render();
+}
+window.setAuthCategory = setAuthCategory;
+
+const OWNER_EMAIL = 'hanan.h.almaymuni@gmail.com';
+const ALLOWED_DOMAIN = 'aol.edu.sa';
+
+function isAllowedEmail(email){
+  const e = (email || '').trim().toLowerCase();
+  if (e === OWNER_EMAIL) return true;
+  return e.endsWith('@' + ALLOWED_DOMAIN);
+}
 
 async function loadProfileAndEnter(user){
   state.authUser = user;
@@ -148,6 +165,12 @@ async function loadProfileAndEnter(user){
   DB.users.client.name = displayName;
   DB.users.trainer.name = displayName;
   DB.users.admin.name = displayName;
+
+  // حسابات الطاقم الأكاديمي/الإداري تبقى معلّقة بانتظار موافقة الإدارة قبل دخول لوحاتها
+  if (profile && profile.category === 'staff' && profile.approval_status === 'pending') {
+    go('pending-approval');
+    return;
+  }
   setRole((profile && profile.role) || 'client');
 }
 
@@ -171,13 +194,24 @@ async function realSignUp(){
   const name = document.getElementById('auth-name').value.trim();
   const email = document.getElementById('auth-email').value.trim();
   const password = document.getElementById('auth-password').value;
+  const category = state.authCategory || 'trainee';
+  const ageVal = category === 'trainee' ? document.getElementById('auth-age')?.value.trim() : '';
+  const weightVal = category === 'trainee' ? document.getElementById('auth-weight')?.value.trim() : '';
+
   if (!name || !email || !password) { state.authError = 'الرجاء تعبئة جميع الحقول'; render(); return; }
   if (password.length < 6) { state.authError = 'كلمة المرور يجب أن تكون 6 أحرف على الأقل'; render(); return; }
+  if (!isAllowedEmail(email)) { state.authError = `التسجيل متاح فقط للبريد الإلكتروني الرسمي ضمن نطاق @${ALLOWED_DOMAIN}`; render(); return; }
+
   state.authBusy = true; state.authError = ''; render();
-  const { data, error } = await sb.auth.signUp({ email, password, options: { data: { full_name: name } } });
+  const { data, error } = await sb.auth.signUp({
+    email, password,
+    options: { data: { full_name: name, category, age: ageVal || null, weight: weightVal || null } }
+  });
   state.authBusy = false;
   if (error) {
-    state.authError = error.message.includes('already registered') ? 'هذا البريد الإلكتروني مسجّل مسبقاً' : error.message;
+    if (error.message.includes('already registered')) state.authError = 'هذا البريد الإلكتروني مسجّل مسبقاً';
+    else if (error.message.includes(ALLOWED_DOMAIN)) state.authError = error.message;
+    else state.authError = error.message;
     render();
     return;
   }
@@ -444,8 +478,28 @@ function screenLogin(){
       </div>
 
       ${state.authMode==='signup' ? `<div class="field"><label>الاسم الكامل</label><input id="auth-name" placeholder="مثال: سارة العتيبي" /></div>` : ''}
-      <div class="field"><label>البريد الإلكتروني</label><input id="auth-email" type="email" placeholder="name@example.com" /></div>
+      <div class="field">
+        <label>البريد الإلكتروني</label>
+        <input id="auth-email" type="email" placeholder="name@aol.edu.sa" />
+        ${state.authMode==='signup' ? `<div class="sidebar-note" style="margin-top:4px;">التسجيل متاح فقط بالبريد الرسمي لأكاديمية التعلم (name@aol.edu.sa)</div>` : ''}
+      </div>
       <div class="field"><label>كلمة المرور</label><input id="auth-password" type="password" placeholder="••••••••" /></div>
+
+      ${state.authMode==='signup' ? `
+      <div class="field">
+        <label>نوع الحساب</label>
+        <div class="tabs" style="margin-top:0;">
+          <button type="button" class="tab ${state.authCategory==='trainee'?'active':''}" onclick="setAuthCategory('trainee')">متدرب</button>
+          <button type="button" class="tab ${state.authCategory==='staff'?'active':''}" onclick="setAuthCategory('staff')">طاقم أكاديمي / إداري</button>
+        </div>
+        ${state.authCategory==='staff' ? `<div class="sidebar-note" style="margin-top:4px;">حسابات الطاقم تحتاج موافقة الإدارة قبل التفعيل الكامل</div>` : ''}
+      </div>
+      ${state.authCategory==='trainee' ? `
+      <div style="display:flex;gap:10px;">
+        <div class="field" style="flex:1;"><label>العمر</label><input id="auth-age" type="number" min="1" max="120" placeholder="مثال: 27" /></div>
+        <div class="field" style="flex:1;"><label>الوزن (كجم)</label><input id="auth-weight" type="number" min="1" max="400" step="0.1" placeholder="مثال: 70" /></div>
+      </div>` : ''}
+      ` : ''}
 
       ${state.authError ? `<div style="background:#fdecec;color:var(--danger);border-radius:12px;padding:10px 12px;font-size:12px;margin-bottom:12px;">${state.authError}</div>` : ''}
 
@@ -454,6 +508,26 @@ function screenLogin(){
         : `<button class="btn btn-primary" ${state.authBusy?'disabled':''} onclick="realSignUp()">${state.authBusy?'جاري الإنشاء...':'إنشاء الحساب'}</button>`
       }
       <div class="sidebar-note" style="text-align:center;">حسابك هنا خاص بك ومحمي — بيانات الدخول تُحفظ بشكل آمن عبر Supabase.</div>
+    </div>
+  </div>`;
+}
+
+// =========================================================
+// شاشة انتظار موافقة الإدارة (حسابات الطاقم الأكاديمي/الإداري)
+// =========================================================
+function screenPendingApproval(){
+  return `<div class="view no-pad" style="display:flex;flex-direction:column;min-height:100%;">
+    <div style="background:linear-gradient(160deg,var(--brand-900),var(--magenta-600) 55%,var(--accent-500));padding:44px 24px 34px;color:#fff;border-radius:0 0 32px 32px;text-align:center;">
+      <div style="width:76px;height:76px;border-radius:18px;background:#fff;display:flex;align-items:center;justify-content:center;margin:0 auto 14px;padding:8px;box-shadow:var(--shadow-md);">
+        <img src="${typeof LOGO_DATA_URI!=='undefined'?LOGO_DATA_URI:''}" alt="أكاديمية التعلم" style="width:100%;height:100%;object-fit:contain;" />
+      </div>
+      <h1 style="margin:0;font-size:20px;">بانتظار موافقة الإدارة</h1>
+    </div>
+    <div style="padding:26px 22px;flex:1;text-align:center;">
+      <span class="list-icon" style="width:56px;height:56px;margin:0 auto 14px;">${icon('shield')}</span>
+      <p style="font-size:13.5px;color:var(--ink-700);line-height:1.9;">تم إنشاء حسابك بنجاح كعضو في الطاقم الأكاديمي/الإداري. لأسباب أمنية، تحتاجين موافقة إدارة الأكاديمية قبل الدخول إلى لوحة التحكم الخاصة بدورك.</p>
+      <p style="font-size:12.5px;color:var(--ink-500);margin-top:10px;">سيتم إعلامك بمجرد الموافقة على حسابك — يمكنك المحاولة بتسجيل الدخول لاحقاً.</p>
+      <button class="btn btn-outline" style="margin-top:22px;" onclick="logout()">${icon('logout')} تسجيل الخروج</button>
     </div>
   </div>`;
 }
@@ -1066,6 +1140,7 @@ function screenAdminPermissions(){
       <span class="meta"><b style="display:block;font-size:14px;">${a.name}</b><span style="font-size:12px;color:var(--ink-500);">${a.title}</span></span>
       <button class="btn btn-danger-ghost btn-sm" onclick="logout()">${icon('logout')} خروج</button>
     </div>
+    <button class="btn btn-primary" style="margin-top:12px;" onclick="openAdminApprovals()">${icon('shield')} طلبات تسجيل الطاقم المعلّقة</button>
     <div class="section-title"><h3>الأدوار الأساسية</h3></div>
     ${DB.roles.map(r=>`
       <div class="card" style="margin-bottom:10px;">
@@ -1085,11 +1160,67 @@ function screenAdminPermissions(){
   </div>`;
 }
 
+// ---------------------------------------------------------
+// طلبات تسجيل الطاقم الأكاديمي/الإداري المعلّقة (موافقة الإدارة)
+// ---------------------------------------------------------
+async function openAdminApprovals(){
+  go('admin-approvals');
+  state.pendingApprovals = null; // جاري التحميل
+  render();
+  try {
+    const { data, error } = await sb.from('profiles')
+      .select('*')
+      .eq('category', 'staff')
+      .eq('approval_status', 'pending')
+      .order('created_at', { ascending: true });
+    state.pendingApprovals = error ? [] : (data || []);
+  } catch (e) {
+    state.pendingApprovals = [];
+  }
+  if (state.route === 'admin-approvals') render();
+}
+window.openAdminApprovals = openAdminApprovals;
+
+async function approveStaff(profileId, role){
+  const { error } = await sb.from('profiles').update({ role, approval_status: 'approved' }).eq('id', profileId);
+  if (error) { toast('حدث خطأ: ' + error.message); return; }
+  toast(role === 'admin' ? 'تم قبول الحساب كإدارة' : 'تم قبول الحساب كمدرب');
+  openAdminApprovals();
+}
+window.approveStaff = approveStaff;
+
+async function rejectStaff(profileId){
+  const { error } = await sb.from('profiles').update({ approval_status: 'rejected' }).eq('id', profileId);
+  if (error) { toast('حدث خطأ: ' + error.message); return; }
+  toast('تم رفض الطلب');
+  openAdminApprovals();
+}
+window.rejectStaff = rejectStaff;
+
+function screenAdminApprovals(){
+  const list = state.pendingApprovals;
+  return `<div class="view">
+    ${backBar('طلبات الطاقم المعلّقة', 'admin-permissions')}
+    ${list === null ? `<div class="card" style="text-align:center;color:var(--ink-500);font-size:13px;">جاري التحميل...</div>` : ''}
+    ${list !== null && list.length === 0 ? `<div class="card" style="text-align:center;color:var(--ink-500);font-size:13px;">لا توجد طلبات معلّقة حالياً</div>` : ''}
+    ${list && list.length ? list.map(p => `
+      <div class="card" style="margin-bottom:10px;">
+        <span class="meta"><b style="display:block;font-size:14px;">${p.full_name || 'بدون اسم'}</b><span style="font-size:12px;color:var(--ink-500);">${p.age ? 'العمر: ' + p.age : ''}${p.age && p.weight ? ' · ' : ''}${p.weight ? 'الوزن: ' + p.weight + 'كجم' : ''}</span></span>
+        <div style="display:flex;gap:8px;margin-top:10px;flex-wrap:wrap;">
+          <button class="btn btn-primary btn-sm" onclick="approveStaff('${p.id}','trainer')">${icon('check')} قبول كمدرب</button>
+          <button class="btn btn-outline btn-sm" onclick="approveStaff('${p.id}','admin')">${icon('shield')} قبول كإداري</button>
+          <button class="btn btn-danger-ghost btn-sm" onclick="rejectStaff('${p.id}')">${icon('x')} رفض</button>
+        </div>
+      </div>`).join('') : ''}
+  </div>`;
+}
+
 // =========================================================
 // الموجّه الرئيسي (Router)
 // =========================================================
 const SCREENS = {
   'login': screenLogin,
+  'pending-approval': screenPendingApproval,
   'client-home': screenClientHome,
   'client-booking': screenClientBooking,
   'client-profile': screenClientProfile,
@@ -1113,6 +1244,7 @@ const SCREENS = {
   'admin-checkin': screenAdminCheckin,
   'admin-support': screenAdminSupport,
   'admin-permissions': screenAdminPermissions,
+  'admin-approvals': screenAdminApprovals,
 };
 
 function render(){
