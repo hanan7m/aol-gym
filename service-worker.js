@@ -4,7 +4,7 @@
 // بحيث يفتح التطبيق فوراً وحتى بدون إنترنت (أو باتصال ضعيف).
 // =========================================================
 
-const CACHE_NAME = 'aol-gym-v1';
+const CACHE_NAME = 'aol-gym-v2';
 const CORE_ASSETS = [
   './',
   './index.html',
@@ -12,6 +12,7 @@ const CORE_ASSETS = [
   './icons.js',
   './logo.js',
   './data.js',
+  './supabase-client.js',
   './app.js',
   './manifest.json',
   './icons/icon-192.png',

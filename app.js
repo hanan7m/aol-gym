@@ -112,9 +112,95 @@ window.setRole = setRole;
 
 function logout(){
   state.role = null;
+  state.authUser = null;
+  state.authProfile = null;
+  if (typeof sb !== 'undefined') sb.auth.signOut();
   go('login');
 }
 window.logout = logout;
+
+// ---------------------------------------------------------
+// تسجيل الدخول الحقيقي عبر Supabase (Authentication)
+// ---------------------------------------------------------
+state.authUser = null;
+state.authProfile = null;
+state.authBusy = false;
+state.authMode = 'signin'; // 'signin' | 'signup'
+state.authError = '';
+
+function setAuthMode(mode){
+  state.authMode = mode;
+  state.authError = '';
+  render();
+}
+window.setAuthMode = setAuthMode;
+
+async function loadProfileAndEnter(user){
+  state.authUser = user;
+  let profile = null;
+  try {
+    const { data, error } = await sb.from('profiles').select('*').eq('id', user.id).single();
+    if (!error) profile = data;
+  } catch (e) { /* ignore */ }
+  state.authProfile = profile;
+  const displayName = (profile && profile.full_name) || user.email;
+  // نربط بيانات الحساب الحقيقي مع اسم العرض في شاشات العميل الحالية (المحتوى التفصيلي لا يزال تجريبياً في هذه المرحلة)
+  DB.users.client.name = displayName;
+  DB.users.trainer.name = displayName;
+  DB.users.admin.name = displayName;
+  setRole((profile && profile.role) || 'client');
+}
+
+async function realSignIn(){
+  const email = document.getElementById('auth-email').value.trim();
+  const password = document.getElementById('auth-password').value;
+  if (!email || !password) { state.authError = 'الرجاء تعبئة البريد الإلكتروني وكلمة المرور'; render(); return; }
+  state.authBusy = true; state.authError = ''; render();
+  const { data, error } = await sb.auth.signInWithPassword({ email, password });
+  state.authBusy = false;
+  if (error) {
+    state.authError = error.message.includes('Invalid') ? 'البريد الإلكتروني أو كلمة المرور غير صحيحة' : error.message;
+    render();
+    return;
+  }
+  await loadProfileAndEnter(data.user);
+}
+window.realSignIn = realSignIn;
+
+async function realSignUp(){
+  const name = document.getElementById('auth-name').value.trim();
+  const email = document.getElementById('auth-email').value.trim();
+  const password = document.getElementById('auth-password').value;
+  if (!name || !email || !password) { state.authError = 'الرجاء تعبئة جميع الحقول'; render(); return; }
+  if (password.length < 6) { state.authError = 'كلمة المرور يجب أن تكون 6 أحرف على الأقل'; render(); return; }
+  state.authBusy = true; state.authError = ''; render();
+  const { data, error } = await sb.auth.signUp({ email, password, options: { data: { full_name: name } } });
+  state.authBusy = false;
+  if (error) {
+    state.authError = error.message.includes('already registered') ? 'هذا البريد الإلكتروني مسجّل مسبقاً' : error.message;
+    render();
+    return;
+  }
+  if (data.user && !data.session) {
+    // تفعيل البريد الإلكتروني مطلوب قبل الدخول
+    state.authError = '';
+    toast('تم إنشاء الحساب! تحققي من بريدك الإلكتروني لتفعيله ثم سجّلي الدخول');
+    state.authMode = 'signin';
+    render();
+    return;
+  }
+  if (data.user) await loadProfileAndEnter(data.user);
+}
+window.realSignUp = realSignUp;
+
+// عند تحميل التطبيق: تحقق إن كان هناك جلسة محفوظة مسبقاً (المستخدم ما يحتاج يسجل دخول كل مرة)
+async function checkExistingSession(){
+  if (typeof sb === 'undefined') return;
+  const { data } = await sb.auth.getSession();
+  if (data && data.session && data.session.user) {
+    await loadProfileAndEnter(data.session.user);
+  }
+}
 
 function toggleBooking(classId){
   if(state.bookedClassIds.has(classId)){
@@ -352,27 +438,22 @@ function screenLogin(){
       <p style="margin:6px 0 0;font-size:13px;opacity:.85;line-height:1.8;">تطبيق صالة أكاديمية التعلم الرياضية — متاح مجاناً لجميع المتدربين والطاقم الإداري، للحجز والمتابعة الصحية والتدريبية.</p>
     </div>
     <div style="padding:22px 20px;flex:1;">
-      <div class="field"><label>رقم الجوال أو البريد الإلكتروني</label><input placeholder="05xxxxxxxx" /></div>
-      <div class="field"><label>كلمة المرور</label><input type="password" placeholder="••••••••" /></div>
-      <button class="btn btn-primary" onclick="toast('هذا نموذج أولي — اختر حساباً تجريبياً بالأسفل')">تسجيل الدخول</button>
-      <div style="text-align:center;margin:14px 0;color:var(--ink-300);font-size:12px;">— أو الدخول بحساب تجريبي —</div>
-      <div style="display:flex;flex-direction:column;gap:10px;">
-        <button class="list-row" style="background:#fff;border:1px solid var(--border);border-radius:16px;padding:12px 14px;width:100%;text-align:right;" onclick="setRole('client')">
-          <span class="list-icon">${icon('user')}</span>
-          <span class="meta"><b>حساب متدرب</b><span>سارة العتيبي — مسار اللياقة والتأهيل</span></span>
-          <span style="color:var(--ink-300);">${icon('chevron')}</span>
-        </button>
-        <button class="list-row" style="background:#fff;border:1px solid var(--border);border-radius:16px;padding:12px 14px;width:100%;text-align:right;" onclick="setRole('trainer')">
-          <span class="list-icon">${icon('dumbbell')}</span>
-          <span class="meta"><b>حساب مدرب</b><span>كابتن عبدالله المطيري</span></span>
-          <span style="color:var(--ink-300);">${icon('chevron')}</span>
-        </button>
-        <button class="list-row" style="background:#fff;border:1px solid var(--border);border-radius:16px;padding:12px 14px;width:100%;text-align:right;" onclick="setRole('admin')">
-          <span class="list-icon">${icon('shield')}</span>
-          <span class="meta"><b>حساب الإدارة</b><span>منال الشهري — مديرة العمليات</span></span>
-          <span style="color:var(--ink-300);">${icon('chevron')}</span>
-        </button>
+      <div class="tabs" style="margin-top:0;">
+        <button class="tab ${state.authMode==='signin'?'active':''}" onclick="setAuthMode('signin')">تسجيل الدخول</button>
+        <button class="tab ${state.authMode==='signup'?'active':''}" onclick="setAuthMode('signup')">إنشاء حساب جديد</button>
       </div>
+
+      ${state.authMode==='signup' ? `<div class="field"><label>الاسم الكامل</label><input id="auth-name" placeholder="مثال: سارة العتيبي" /></div>` : ''}
+      <div class="field"><label>البريد الإلكتروني</label><input id="auth-email" type="email" placeholder="name@example.com" /></div>
+      <div class="field"><label>كلمة المرور</label><input id="auth-password" type="password" placeholder="••••••••" /></div>
+
+      ${state.authError ? `<div style="background:#fdecec;color:var(--danger);border-radius:12px;padding:10px 12px;font-size:12px;margin-bottom:12px;">${state.authError}</div>` : ''}
+
+      ${state.authMode==='signin'
+        ? `<button class="btn btn-primary" ${state.authBusy?'disabled':''} onclick="realSignIn()">${state.authBusy?'جاري الدخول...':'تسجيل الدخول'}</button>`
+        : `<button class="btn btn-primary" ${state.authBusy?'disabled':''} onclick="realSignUp()">${state.authBusy?'جاري الإنشاء...':'إنشاء الحساب'}</button>`
+      }
+      <div class="sidebar-note" style="text-align:center;">حسابك هنا خاص بك ومحمي — بيانات الدخول تُحفظ بشكل آمن عبر Supabase.</div>
     </div>
   </div>`;
 }
@@ -1054,3 +1135,4 @@ function render(){
 }
 
 render();
+checkExistingSession();
