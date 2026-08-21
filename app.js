@@ -366,20 +366,31 @@ function setupAuthListener(){
   });
 }
 
+// قفل بسيط يمنع تنفيذ أكثر من عملية حجز/إلغاء في نفس اللحظة (نقر متكرر سريع)
+state.bookingBusy = false;
+
 async function toggleBooking(classId){
+  if (state.bookingBusy) return;
   const c = DB.classes.find(x=>x.id===classId);
   if(!c) return;
   const existing = DB.bookings.find(b=>b.classId===classId && b.status==='مؤكد');
+  state.bookingBusy = true; render();
   if (existing) {
     const { error } = await sb.from('bookings').delete().eq('id', existing.id);
-    if (error) { toast('حدث خطأ: ' + error.message); return; }
+    state.bookingBusy = false;
+    if (error) { toast('حدث خطأ: ' + error.message); render(); return; }
     toast('تم إلغاء الحجز');
   } else {
     const { error } = await sb.from('bookings').insert({
       user_id: state.authUser.id, class_id: c.id, title: c.name,
       booking_date: c.day, booking_time: c.time, trainer_name: c.trainer, status: 'مؤكد'
     });
-    if (error) { toast('حدث خطأ: ' + error.message); return; }
+    state.bookingBusy = false;
+    if (error) {
+      // 23505 = محاولة حجز مكرر لنفس الكلاس (تحمي منها قاعدة البيانات) — نتجاهلها بهدوء ونحدّث الحالة فقط
+      if (error.code !== '23505') toast('حدث خطأ: ' + error.message);
+      await loadLiveData(); render(); return;
+    }
     toast('تم تأكيد الحجز بنجاح');
   }
   await loadLiveData();
@@ -388,15 +399,22 @@ async function toggleBooking(classId){
 window.toggleBooking = toggleBooking;
 
 async function bookPrivateSlot(slotId){
+  if (state.bookingBusy) return;
   const s = DB.privateSlots.find(x=>x.id===slotId);
   if(!s || s.isBooked) return;
+  state.bookingBusy = true; render();
   const { error: insErr } = await sb.from('bookings').insert({
     user_id: state.authUser.id, slot_id: s.id, title: s.type,
     booking_date: s.date, booking_time: s.time, trainer_name: s.trainer, status: 'مؤكد'
   });
-  if (insErr) { toast('حدث خطأ: ' + insErr.message); return; }
+  if (insErr) {
+    state.bookingBusy = false;
+    if (insErr.code !== '23505') toast('حدث خطأ: ' + insErr.message);
+    await loadLiveData(); render(); return;
+  }
   const { error: updErr } = await sb.from('private_slots').update({ is_booked: true }).eq('id', s.id);
-  if (updErr) { toast('حدث خطأ: ' + updErr.message); return; }
+  state.bookingBusy = false;
+  if (updErr) { toast('حدث خطأ: ' + updErr.message); render(); return; }
   toast('تم تأكيد حجز الموعد الخاص');
   await loadLiveData();
   render();
@@ -835,7 +853,7 @@ function screenClientBooking(){
           </div>
           <div style="display:flex;align-items:center;justify-content:space-between;margin-top:10px;">
             <span class="badge badge-blue">${icon('clock')} ${s.date} · ${s.time}</span>
-            <button class="btn btn-primary btn-sm" onclick="bookPrivateSlot('${s.id}')">احجز الآن</button>
+            <button class="btn btn-primary btn-sm" ${state.bookingBusy?'disabled':''} onclick="bookPrivateSlot('${s.id}')">${state.bookingBusy?'جاري...':'احجز الآن'}</button>
           </div>
         </div>`).join('')}
     ` : `
@@ -856,8 +874,8 @@ function screenClientBooking(){
             </div>
             <span class="badge ${full?'badge-red':'badge-gray'}">${c.booked}/${c.capacity}</span>
           </div>
-          <button class="btn ${booked?'btn-danger-ghost':full?'btn-outline':'btn-primary'}" style="margin-top:12px;" ${full?'disabled':''} onclick="toggleBooking('${c.id}')">
-            ${booked? 'إلغاء الحجز' : full? 'مكتمل العدد' : 'احجز مكانك'}
+          <button class="btn ${booked?'btn-danger-ghost':full?'btn-outline':'btn-primary'}" style="margin-top:12px;" ${(full||state.bookingBusy)?'disabled':''} onclick="toggleBooking('${c.id}')">
+            ${state.bookingBusy? 'جاري...' : booked? 'إلغاء الحجز' : full? 'مكتمل العدد' : 'احجز مكانك'}
           </button>
         </div>`;
       }).join('')}
