@@ -236,6 +236,59 @@ async function checkExistingSession(){
   }
 }
 
+// ---------------------------------------------------------
+// نسيت كلمة المرور — إرسال رابط إعادة تعيين ثم تحديثها
+// ---------------------------------------------------------
+state.authResetError = '';
+state.authResetBusy = false;
+
+function goForgotPassword(){
+  state.authError = '';
+  state.authResetError = '';
+  go('forgot-password');
+}
+window.goForgotPassword = goForgotPassword;
+
+async function sendPasswordReset(){
+  const email = document.getElementById('reset-email').value.trim();
+  if (!email) { state.authResetError = 'الرجاء إدخال البريد الإلكتروني'; render(); return; }
+  state.authResetBusy = true; state.authResetError = ''; render();
+  const redirectTo = window.location.href.split('#')[0].split('?')[0];
+  const { error } = await sb.auth.resetPasswordForEmail(email, { redirectTo });
+  state.authResetBusy = false;
+  if (error) { state.authResetError = error.message; render(); return; }
+  toast('تم إرسال رابط إعادة تعيين كلمة المرور إلى بريدك الإلكتروني');
+  state.authMode = 'signin';
+  go('login');
+}
+window.sendPasswordReset = sendPasswordReset;
+
+async function updatePasswordAfterRecovery(){
+  const p1 = document.getElementById('reset-new-password').value;
+  const p2 = document.getElementById('reset-new-password-confirm').value;
+  if (!p1 || p1.length < 6) { state.authResetError = 'كلمة المرور يجب أن تكون 6 أحرف على الأقل'; render(); return; }
+  if (p1 !== p2) { state.authResetError = 'كلمتا المرور غير متطابقتين'; render(); return; }
+  state.authResetBusy = true; state.authResetError = ''; render();
+  const { data, error } = await sb.auth.updateUser({ password: p1 });
+  state.authResetBusy = false;
+  if (error) { state.authResetError = error.message; render(); return; }
+  toast('تم تحديث كلمة المرور بنجاح');
+  if (data && data.user) await loadProfileAndEnter(data.user);
+  else go('login');
+}
+window.updatePasswordAfterRecovery = updatePasswordAfterRecovery;
+
+// Supabase يفتح رابط البريد ويُنشئ جلسة استرجاع مؤقتة تلقائياً — نلتقط هذا الحدث وننقل المستخدم لشاشة تعيين كلمة مرور جديدة
+function setupAuthListener(){
+  if (typeof sb === 'undefined') return;
+  sb.auth.onAuthStateChange((event) => {
+    if (event === 'PASSWORD_RECOVERY') {
+      state.authResetError = '';
+      go('reset-password');
+    }
+  });
+}
+
 function toggleBooking(classId){
   if(state.bookedClassIds.has(classId)){
     state.bookedClassIds.delete(classId);
@@ -484,6 +537,7 @@ function screenLogin(){
         ${state.authMode==='signup' ? `<div class="sidebar-note" style="margin-top:4px;">التسجيل متاح فقط بالبريد الرسمي لأكاديمية التعلم (name@aol.edu.sa)</div>` : ''}
       </div>
       <div class="field"><label>كلمة المرور</label><input id="auth-password" type="password" placeholder="••••••••" /></div>
+      ${state.authMode==='signin' ? `<div style="text-align:left;margin:-8px 0 12px;"><span style="font-size:12px;color:var(--brand-600);font-weight:700;cursor:pointer;" onclick="goForgotPassword()">نسيت كلمة المرور؟</span></div>` : ''}
 
       ${state.authMode==='signup' ? `
       <div class="field">
@@ -528,6 +582,33 @@ function screenPendingApproval(){
       <p style="font-size:13.5px;color:var(--ink-700);line-height:1.9;">تم إنشاء حسابك بنجاح كعضو في الطاقم الأكاديمي/الإداري. لأسباب أمنية، تحتاجين موافقة إدارة الأكاديمية قبل الدخول إلى لوحة التحكم الخاصة بدورك.</p>
       <p style="font-size:12.5px;color:var(--ink-500);margin-top:10px;">سيتم إعلامك بمجرد الموافقة على حسابك — يمكنك المحاولة بتسجيل الدخول لاحقاً.</p>
       <button class="btn btn-outline" style="margin-top:22px;" onclick="logout()">${icon('logout')} تسجيل الخروج</button>
+    </div>
+  </div>`;
+}
+
+// =========================================================
+// نسيت كلمة المرور / تعيين كلمة مرور جديدة
+// =========================================================
+function screenForgotPassword(){
+  return `<div class="view no-pad" style="display:flex;flex-direction:column;min-height:100%;">
+    ${backBar('نسيت كلمة المرور', 'login')}
+    <div style="padding:6px 20px 22px;flex:1;">
+      <p style="font-size:12.5px;color:var(--ink-500);line-height:1.8;margin-bottom:14px;">أدخلي بريدك الإلكتروني المسجّل، وسنرسل لك رابط إعادة تعيين كلمة المرور.</p>
+      <div class="field"><label>البريد الإلكتروني</label><input id="reset-email" type="email" placeholder="name@aol.edu.sa" /></div>
+      ${state.authResetError ? `<div style="background:#fdecec;color:var(--danger);border-radius:12px;padding:10px 12px;font-size:12px;margin-bottom:12px;">${state.authResetError}</div>` : ''}
+      <button class="btn btn-primary" ${state.authResetBusy?'disabled':''} onclick="sendPasswordReset()">${state.authResetBusy?'جاري الإرسال...':'إرسال رابط إعادة التعيين'}</button>
+    </div>
+  </div>`;
+}
+
+function screenResetPassword(){
+  return `<div class="view no-pad" style="display:flex;flex-direction:column;min-height:100%;">
+    <div style="padding:30px 20px 6px;"><h2 style="margin:0;font-size:17px;">تعيين كلمة مرور جديدة</h2></div>
+    <div style="padding:6px 20px 22px;flex:1;">
+      <div class="field"><label>كلمة المرور الجديدة</label><input id="reset-new-password" type="password" placeholder="••••••••" /></div>
+      <div class="field"><label>تأكيد كلمة المرور</label><input id="reset-new-password-confirm" type="password" placeholder="••••••••" /></div>
+      ${state.authResetError ? `<div style="background:#fdecec;color:var(--danger);border-radius:12px;padding:10px 12px;font-size:12px;margin-bottom:12px;">${state.authResetError}</div>` : ''}
+      <button class="btn btn-primary" ${state.authResetBusy?'disabled':''} onclick="updatePasswordAfterRecovery()">${state.authResetBusy?'جاري التحديث...':'تحديث كلمة المرور'}</button>
     </div>
   </div>`;
 }
@@ -1221,6 +1302,8 @@ function screenAdminApprovals(){
 const SCREENS = {
   'login': screenLogin,
   'pending-approval': screenPendingApproval,
+  'forgot-password': screenForgotPassword,
+  'reset-password': screenResetPassword,
   'client-home': screenClientHome,
   'client-booking': screenClientBooking,
   'client-profile': screenClientProfile,
@@ -1267,4 +1350,5 @@ function render(){
 }
 
 render();
+setupAuthListener();
 checkExistingSession();
