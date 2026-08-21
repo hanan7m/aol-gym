@@ -191,6 +191,16 @@ function mapInbody(r){ return { id:r.id, date:r.record_date, weight:r.weight, mu
 function mapProgram(r){ return { id:r.id, type:r.type, title:r.title, trainer:r.trainer_name, date:r.program_date, notes:r.notes }; }
 function mapTicket(r){ return { id:r.id, category:r.category, subject:r.subject, status:r.status, date:(r.created_at||'').slice(0,10), reply:r.reply, userId:r.user_id }; }
 function mapNotif(r){ return { id:r.id, title:r.title, body:r.body, type:r.type, read:r.read, time:relTimeAr(r.created_at) }; }
+function mapStaff(r){ return { id:r.id, name:r.name, role:r.role, access:r.access }; }
+function mapRole(r){ return { id:r.id, role:r.role, perms:r.perms||[] }; }
+function mapTrainerRating(r){ return { id:r.id, trainer:r.trainer, avg:r.avg, count:r.count }; }
+function mapAttendance(r){ return { id:r.id, name:r.member_name, type:r.type, method:r.method, time:arTime(r.occurred_at) }; }
+
+function arTime(iso){
+  if (!iso) return '';
+  try { return new Date(iso).toLocaleTimeString('ar-SA', { hour:'2-digit', minute:'2-digit' }); }
+  catch(e){ return ''; }
+}
 
 function relTimeAr(iso){
   if (!iso) return '';
@@ -211,7 +221,7 @@ async function loadLiveData(){
   const uid = state.authUser.id;
   const isAdminUser = state.authProfile && state.authProfile.role === 'admin';
 
-  const [classesRes, slotsRes, offersRes, ticketsRes, bookingsRes, inbodyRes, programsRes, notifRes] = await Promise.all([
+  const [classesRes, slotsRes, offersRes, ticketsRes, bookingsRes, inbodyRes, programsRes, notifRes, ratingsRes] = await Promise.all([
     sb.from('classes').select('*').order('day'),
     sb.from('private_slots').select('*').order('created_at'),
     sb.from('offers').select('*').order('created_at', { ascending: false }),
@@ -220,18 +230,50 @@ async function loadLiveData(){
     isAdminUser ? Promise.resolve({ data: [], error: null }) : sb.from('inbody_records').select('*').eq('user_id', uid).order('record_date'),
     isAdminUser ? Promise.resolve({ data: [], error: null }) : sb.from('programs').select('*').eq('user_id', uid).order('program_date', { ascending: false }),
     isAdminUser ? Promise.resolve({ data: [], error: null }) : sb.from('notifications').select('*').eq('user_id', uid).order('created_at', { ascending: false }),
+    sb.from('trainer_ratings').select('*').order('avg', { ascending: false }),
   ]);
 
   if (!classesRes.error && classesRes.data) DB.classes = classesRes.data.map(mapClass);
   if (!slotsRes.error && slotsRes.data) DB.privateSlots = slotsRes.data.map(mapSlot);
   if (!offersRes.error && offersRes.data) DB.offers = offersRes.data.map(mapOffer);
   if (!ticketsRes.error && ticketsRes.data) DB.tickets = ticketsRes.data.map(mapTicket);
+  if (!ratingsRes.error && ratingsRes.data) DB.trainerRatings = ratingsRes.data.map(mapTrainerRating);
   if (!isAdminUser) {
     if (!bookingsRes.error && bookingsRes.data) DB.bookings = bookingsRes.data.map(mapBooking);
     if (!inbodyRes.error && inbodyRes.data) DB.inbody = inbodyRes.data.map(mapInbody);
     if (!programsRes.error && programsRes.data) DB.programs = programsRes.data.map(mapProgram);
     if (!notifRes.error && notifRes.data) DB.notifications = notifRes.data.map(mapNotif);
   }
+  if (isAdminUser) {
+    await loadAdminData();
+  }
+}
+
+// يحمّل بيانات لوحة الإدارة (الفريق، الصلاحيات، سجل الحضور، الإحصائيات) — للأدمن فقط
+async function loadAdminData(){
+  const [staffRes, rolesRes, logRes, statsRes, bookingsCountRes, newMembersRes] = await Promise.all([
+    sb.from('staff_members').select('*').order('sort_order'),
+    sb.from('access_roles').select('*').order('sort_order'),
+    sb.from('attendance_log').select('*').order('occurred_at', { ascending: false }).limit(20),
+    sb.from('admin_stats').select('*').eq('id', 1).maybeSingle(),
+    sb.from('bookings').select('id', { count: 'exact', head: true }).eq('status', 'مؤكد'),
+    sb.from('profiles').select('id', { count: 'exact', head: true }).gte('created_at', new Date(Date.now() - 7*24*60*60*1000).toISOString()),
+  ]);
+
+  if (!staffRes.error && staffRes.data) DB.staff = staffRes.data.map(mapStaff);
+  if (!rolesRes.error && rolesRes.data) DB.roles = rolesRes.data.map(mapRole);
+  if (!logRes.error && logRes.data) DB.attendanceLog = logRes.data.map(mapAttendance);
+
+  const s = (!statsRes.error && statsRes.data) ? statsRes.data : null;
+  DB.attendanceTrend = s ? (s.attendance_trend || []) : [];
+  DB.serviceUsage = s ? (s.service_usage || []) : [];
+  DB.weeklyStats = {
+    visits: s ? s.visits : 0,
+    completedSessions: s ? s.completed_sessions : 0,
+    attendanceRate: s ? s.attendance_rate : 0,
+    bookings: bookingsCountRes.error ? 0 : (bookingsCountRes.count || 0),
+    newMembers: newMembersRes.error ? 0 : (newMembersRes.count || 0),
+  };
 }
 
 async function realSignIn(){
@@ -1194,7 +1236,7 @@ function noteSheet(name){
 window.noteSheet = noteSheet;
 
 function screenTrainerRatings(){
-  const me = DB.trainerRatings.find(r=>r.trainer==='عبدالله المطيري');
+  const me = DB.trainerRatings.find(r=>r.trainer==='عبدالله المطيري') || { avg:'—', count:0 };
   return `<div class="view">
     ${topBar('تقييماتي', 'آراء العملاء حول جلساتك')}
     <div class="card" style="text-align:center;">
@@ -1300,7 +1342,7 @@ function screenAdminOffers(){
 
     <div class="section-title"><h3>تقييمات المدربين</h3></div>
     <div class="card">
-      ${DB.trainerRatings.map(r=>`<div class="list-row"><span class="list-icon">${icon('star')}</span><span class="meta"><b>${r.trainer}</b><span>${r.count} تقييم</span></span><b>${r.avg}</b></div>`).join('')}
+      ${DB.trainerRatings.length ? DB.trainerRatings.map(r=>`<div class="list-row"><span class="list-icon">${icon('star')}</span><span class="meta"><b>${r.trainer}</b><span>${r.count} تقييم</span></span><b>${r.avg}</b></div>`).join('') : emptyState('لا توجد تقييمات بعد')}
     </div>
   </div>`;
 }
@@ -1349,17 +1391,19 @@ function screenAdminReports(){
 }
 
 function screenAdminCheckin(){
+  const checkins = DB.attendanceLog.filter(a=>a.type==='دخول').length;
+  const checkouts = DB.attendanceLog.filter(a=>a.type==='خروج').length;
   return `<div class="view">
     ${topBar('سجل الحضور اليومي', new Date().toLocaleDateString('ar-SA',{weekday:'long', day:'numeric', month:'long'}))}
     <div class="stat-grid">
-      <div class="stat-box"><div class="n">312</div><div class="l">دخول اليوم</div></div>
-      <div class="stat-box"><div class="n">104</div><div class="l">داخل الصالة الآن</div></div>
+      <div class="stat-box"><div class="n">${checkins}</div><div class="l">دخول</div></div>
+      <div class="stat-box"><div class="n">${Math.max(checkins - checkouts, 0)}</div><div class="l">داخل الصالة الآن</div></div>
     </div>
     <div class="section-title"><h3>آخر عمليات الدخول/الخروج</h3></div>
     <div class="card">
-      ${DB.attendanceLog.map(a=>`
+      ${DB.attendanceLog.length ? DB.attendanceLog.map(a=>`
         <div class="list-row"><span class="list-icon" style="color:${a.type==='دخول'?'var(--brand-600)':'var(--ink-500)'};">${icon('scan')}</span>
-        <span class="meta"><b>${a.name}</b><span>${a.method} · ${a.type}</span></span><span style="font-size:11px;color:var(--ink-500);">${a.time}</span></div>`).join('')}
+        <span class="meta"><b>${a.name}</b><span>${a.method} · ${a.type}</span></span><span style="font-size:11px;color:var(--ink-500);">${a.time}</span></div>`).join('') : emptyState('لا توجد عمليات دخول/خروج بعد')}
     </div>
   </div>`;
 }
@@ -1395,19 +1439,19 @@ function screenAdminPermissions(){
       <button class="btn btn-danger-ghost btn-sm" onclick="logout()">${icon('logout')} خروج</button>
     </div>
     <div class="section-title"><h3>الأدوار الأساسية</h3></div>
-    ${DB.roles.map(r=>`
+    ${DB.roles.length ? DB.roles.map(r=>`
       <div class="card" style="margin-bottom:10px;">
         <b style="font-size:13.5px;">${r.role}</b>
         <div style="margin-top:8px;display:flex;flex-wrap:wrap;gap:6px;">
           ${r.perms.map(p=>`<span class="badge badge-gray">${p}</span>`).join('')}
         </div>
-      </div>`).join('')}
+      </div>`).join('') : emptyState('لا توجد أدوار معرّفة بعد')}
 
     <div class="section-title"><h3>أعضاء الفريق</h3></div>
     <div class="card">
-      ${DB.staff.map(s=>`
+      ${DB.staff.length ? DB.staff.map(s=>`
         <div class="list-row"><span class="trainer-avatar">${s.name.split(' ').map(w=>w[0]).slice(0,2).join('')}</span>
-        <span class="meta"><b>${s.name}</b><span>${s.role}</span></span><span class="badge badge-blue">${s.access}</span></div>`).join('')}
+        <span class="meta"><b>${s.name}</b><span>${s.role}</span></span><span class="badge badge-blue">${s.access}</span></div>`).join('') : emptyState('لا يوجد أعضاء فريق بعد')}
     </div>
     <button class="btn btn-outline" style="margin-top:14px;" onclick="toast('تم فتح نموذج دعوة عضو جديد للفريق')">${icon('plus')} دعوة عضو جديد للفريق</button>
   </div>`;
