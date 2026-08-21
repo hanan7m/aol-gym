@@ -183,8 +183,9 @@ async function loadProfileAndEnter(user){
 // ---------------------------------------------------------
 // تحويل صفوف Supabase إلى الشكل الذي تتوقعه شاشات الواجهة
 // ---------------------------------------------------------
-function mapClass(r){ return { id:r.id, name:r.name, type:r.type, trainer:r.trainer_name, day:r.day, time:r.time, duration:r.duration, capacity:r.capacity, booked:r.booked, location:r.location }; }
-function mapSlot(r){ return { id:r.id, trainer:r.trainer_name, date:r.slot_date, time:r.slot_time, type:r.session_type, isBooked:r.is_booked }; }
+const BRANCHES = ['فرع الفرسان', 'فرع الرياض'];
+function mapClass(r){ return { id:r.id, name:r.name, type:r.type, trainer:r.trainer_name, day:r.day, time:r.time, duration:r.duration, capacity:r.capacity, booked:r.booked, location:r.location, branch:r.branch }; }
+function mapSlot(r){ return { id:r.id, trainer:r.trainer_name, date:r.slot_date, time:r.slot_time, type:r.session_type, isBooked:r.is_booked, branch:r.branch }; }
 function mapOffer(r){ return { id:r.id, title:r.title, audience:r.audience, status:r.status, sent:(r.created_at||'').slice(0,10), reach:r.reach }; }
 function mapBooking(r){ return { id:r.id, classId:r.class_id, slotId:r.slot_id, title:r.title, date:r.booking_date, time:r.booking_time, trainer:r.trainer_name, status:r.status }; }
 function mapInbody(r){ return { id:r.id, date:r.record_date, weight:r.weight, muscle:r.muscle, fat:r.fat }; }
@@ -417,26 +418,30 @@ async function toggleBooking(classId){
   if(!c) return;
   const existing = DB.bookings.find(b=>b.classId===classId && b.status==='مؤكد');
   state.bookingBusy = true; render();
-  if (existing) {
-    const { error } = await sb.from('bookings').delete().eq('id', existing.id);
-    state.bookingBusy = false;
-    if (error) { toast('حدث خطأ: ' + error.message); render(); return; }
-    toast('تم إلغاء الحجز');
-  } else {
-    const { error } = await sb.from('bookings').insert({
-      user_id: state.authUser.id, class_id: c.id, title: c.name,
-      booking_date: c.day, booking_time: c.time, trainer_name: c.trainer, status: 'مؤكد'
-    });
-    state.bookingBusy = false;
-    if (error) {
-      // 23505 = محاولة حجز مكرر لنفس الكلاس (تحمي منها قاعدة البيانات) — نتجاهلها بهدوء ونحدّث الحالة فقط
-      if (error.code !== '23505') toast('حدث خطأ: ' + error.message);
-      await loadLiveData(); render(); return;
+  try {
+    if (existing) {
+      const { error } = await sb.from('bookings').delete().eq('id', existing.id);
+      if (error) { toast('حدث خطأ: ' + error.message); return; }
+      toast('تم إلغاء الحجز');
+    } else {
+      const { error } = await sb.from('bookings').insert({
+        user_id: state.authUser.id, class_id: c.id, title: c.name,
+        booking_date: c.day, booking_time: c.time, trainer_name: c.trainer, status: 'مؤكد'
+      });
+      if (error) {
+        // 23505 = محاولة حجز مكرر لنفس الكلاس (تحمي منها قاعدة البيانات) — نتجاهلها بهدوء ونحدّث الحالة فقط
+        if (error.code !== '23505') toast('حدث خطأ: ' + error.message);
+        return;
+      }
+      toast('تم تأكيد الحجز بنجاح');
     }
-    toast('تم تأكيد الحجز بنجاح');
+  } catch (e) {
+    toast('تعذّر الاتصال، حاولي مرة أخرى');
+  } finally {
+    state.bookingBusy = false;
+    await loadLiveData();
+    render();
   }
-  await loadLiveData();
-  render();
 }
 window.toggleBooking = toggleBooking;
 
@@ -445,21 +450,25 @@ async function bookPrivateSlot(slotId){
   const s = DB.privateSlots.find(x=>x.id===slotId);
   if(!s || s.isBooked) return;
   state.bookingBusy = true; render();
-  const { error: insErr } = await sb.from('bookings').insert({
-    user_id: state.authUser.id, slot_id: s.id, title: s.type,
-    booking_date: s.date, booking_time: s.time, trainer_name: s.trainer, status: 'مؤكد'
-  });
-  if (insErr) {
+  try {
+    const { error: insErr } = await sb.from('bookings').insert({
+      user_id: state.authUser.id, slot_id: s.id, title: s.type,
+      booking_date: s.date, booking_time: s.time, trainer_name: s.trainer, status: 'مؤكد'
+    });
+    if (insErr) {
+      if (insErr.code !== '23505') toast('حدث خطأ: ' + insErr.message);
+      return;
+    }
+    const { error: updErr } = await sb.from('private_slots').update({ is_booked: true }).eq('id', s.id);
+    if (updErr) { toast('حدث خطأ: ' + updErr.message); return; }
+    toast('تم تأكيد حجز الموعد الخاص');
+  } catch (e) {
+    toast('تعذّر الاتصال، حاولي مرة أخرى');
+  } finally {
     state.bookingBusy = false;
-    if (insErr.code !== '23505') toast('حدث خطأ: ' + insErr.message);
-    await loadLiveData(); render(); return;
+    await loadLiveData();
+    render();
   }
-  const { error: updErr } = await sb.from('private_slots').update({ is_booked: true }).eq('id', s.id);
-  state.bookingBusy = false;
-  if (updErr) { toast('حدث خطأ: ' + updErr.message); render(); return; }
-  toast('تم تأكيد حجز الموعد الخاص');
-  await loadLiveData();
-  render();
 }
 window.bookPrivateSlot = bookPrivateSlot;
 
@@ -523,10 +532,11 @@ window.addOffer = addOffer;
 
 async function addClass(){
   const name = document.getElementById('cls-name').value.trim();
+  const branch = document.getElementById('cls-branch').value;
   const day = document.getElementById('cls-day').value;
   const time = document.getElementById('cls-time').value.trim();
   if(!name || !time){ toast('الرجاء تعبئة اسم الكلاس والوقت'); return; }
-  const { error } = await sb.from('classes').insert({ name, type:'عام', trainer_name:'—', day, time, duration:'45 د', capacity:16, location:'الصالة الرئيسية' });
+  const { error } = await sb.from('classes').insert({ name, type:'عام', trainer_name:'—', day, time, duration:'45 د', capacity:16, location:'الصالة الرئيسية', branch });
   if (error) { toast('حدث خطأ: ' + error.message); return; }
   toast('تمت إضافة الكلاس للجدول');
   await loadLiveData();
@@ -877,17 +887,23 @@ function screenClientHome(){
 function screenClientBooking(){
   const days = DB.weekDays;
   const activeDay = state.params.day || days[0];
-  const list = DB.classes.filter(c=>c.day===activeDay);
+  const activeBranch = state.params.branch || BRANCHES[0];
+  const list = DB.classes.filter(c=>c.day===activeDay && c.branch===activeBranch);
+  const slots = DB.privateSlots.filter(s=>!s.isBooked && s.branch===activeBranch);
   return `<div class="view">
     ${topBar('الحجوزات', 'استكشف الكلاسات الجماعية والجلسات الخاصة')}
+    <div class="seg" style="margin-bottom:10px;">
+      ${BRANCHES.map(b=>`<button class="seg-opt ${activeBranch===b?'active':''}" onclick="go('client-booking',{tab:'${state.params.tab||'group'}',day:'${activeDay}',branch:'${b}'})">${b}</button>`).join('')}
+    </div>
+    <div style="font-size:11px;color:var(--ink-500);margin:-4px 0 10px;">${icon('shield')} الفرعان مخصصان للنساء حالياً</div>
     <div class="tabs">
-      <button class="tab ${!state.params.tab||state.params.tab==='group'?'active':''}" onclick="go('client-booking',{tab:'group',day:'${activeDay}'})">كلاسات جماعية</button>
-      <button class="tab ${state.params.tab==='private'?'active':''}" onclick="go('client-booking',{tab:'private'})">جلسات خاصة</button>
+      <button class="tab ${!state.params.tab||state.params.tab==='group'?'active':''}" onclick="go('client-booking',{tab:'group',day:'${activeDay}',branch:'${activeBranch}'})">كلاسات جماعية</button>
+      <button class="tab ${state.params.tab==='private'?'active':''}" onclick="go('client-booking',{tab:'private',branch:'${activeBranch}'})">جلسات خاصة</button>
     </div>
 
     ${state.params.tab==='private' ? `
       <div class="section-title" style="margin-top:6px;"><h3>مواعيد متاحة</h3></div>
-      ${DB.privateSlots.filter(s=>!s.isBooked).length===0 ? emptyState('لا توجد مواعيد خاصة متاحة حالياً') : DB.privateSlots.filter(s=>!s.isBooked).map(s=>`
+      ${slots.length===0 ? emptyState('لا توجد مواعيد خاصة متاحة حالياً في هذا الفرع') : slots.map(s=>`
         <div class="card" style="margin-bottom:10px;">
           <div class="list-row" style="border:none;padding:0;">
             <span class="list-icon">${icon('user')}</span>
@@ -900,9 +916,9 @@ function screenClientBooking(){
         </div>`).join('')}
     ` : `
       <div class="day-strip">
-        ${days.map(d=>`<button class="day-pill ${d===activeDay?'active':''}" onclick="go('client-booking',{tab:'group',day:'${d}'})"><b>${d.slice(0,3)}</b><span>${DB.classes.filter(c=>c.day===d).length} كلاس</span></button>`).join('')}
+        ${days.map(d=>`<button class="day-pill ${d===activeDay?'active':''}" onclick="go('client-booking',{tab:'group',day:'${d}',branch:'${activeBranch}'})"><b>${d.slice(0,3)}</b><span>${DB.classes.filter(c=>c.day===d && c.branch===activeBranch).length} كلاس</span></button>`).join('')}
       </div>
-      ${list.length===0 ? emptyState('لا توجد كلاسات مجدولة في هذا اليوم') : list.map(c=>{
+      ${list.length===0 ? emptyState('لا توجد كلاسات مجدولة في هذا اليوم لهذا الفرع') : list.map(c=>{
         const booked = DB.bookings.some(b=>b.classId===c.id && b.status==='مؤكد');
         const full = c.booked>=c.capacity && !booked;
         return `<div class="card" style="margin-bottom:10px;">
@@ -1295,6 +1311,7 @@ function screenAdminClasses(){
         <div style="display:flex;justify-content:space-between;align-items:flex-start;">
           <div>
             <span class="badge badge-gray">${c.day}</span>
+            <span class="badge badge-blue">${c.branch}</span>
             <h4 style="margin:8px 0 2px;font-size:14.5px;">${c.name}</h4>
             <div class="info">${icon('user')} ${c.trainer} · ${icon('clock')} ${c.time}</div>
           </div>
@@ -1312,6 +1329,7 @@ function screenAdminClassesNew(){
   return `<div class="view">
     ${backBar('إضافة كلاس جديد','admin-classes')}
     <div class="field"><label>اسم الكلاس</label><input id="cls-name" placeholder="مثال: يوغا مسائية" /></div>
+    <div class="field"><label>الفرع</label><select id="cls-branch">${BRANCHES.map(b=>`<option>${b}</option>`).join('')}</select></div>
     <div class="field"><label>اليوم</label><select id="cls-day">${DB.weekDays.map(d=>`<option>${d}</option>`).join('')}</select></div>
     <div class="field"><label>الوقت</label><input id="cls-time" placeholder="مثال: 06:00 م" /></div>
     <div class="field"><label>المدرب</label><select><option>عبدالله المطيري</option><option>نورة الحربي</option><option>ريم الدوسري</option><option>فهد العنزي</option></select></div>

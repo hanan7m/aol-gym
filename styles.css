@@ -62,7 +62,7 @@ body{
   direction:rtl;
   -webkit-font-smoothing:antialiased;
 }
-button{font-family:inherit; cursor:pointer;}
+button{font-family:inherit; cursor:pointer; touch-action:manipulation;}
 input,select,textarea{font-family:inherit;}
 a{text-decoration:none; color:inherit;}
 ::-webkit-scrollbar{width:0; height:0;}
