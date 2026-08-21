@@ -6,7 +6,6 @@ const state = {
   role: null,           // 'client' | 'trainer' | 'admin'
   route: 'login',
   params: {},
-  bookedClassIds: new Set(['c1','c4']),
   ticketDraft: { category: 'فني', subject: '', message: '' },
   toastTimer: null,
   deferredInstallPrompt: null,   // حدث تثبيت PWA (Android/Chrome/Edge) بانتظار الاستخدام
@@ -72,6 +71,11 @@ function installBanner(){
 }
 
 function fmtMoney(n){ return n.toLocaleString('ar-SA') + ' ر.س'; }
+
+// قياس InBody الأخير — مع قيمة بديلة عند عدم وجود أي قياسات مسجّلة بعد للمتدرب
+function lastInbody(){
+  return (DB.inbody && DB.inbody.length) ? DB.inbody.at(-1) : { weight:'—', muscle:'—', fat:'—', date:'لا يوجد قياس بعد' };
+}
 
 function go(route, params={}){
   state.route = route;
@@ -166,12 +170,68 @@ async function loadProfileAndEnter(user){
   DB.users.trainer.name = displayName;
   DB.users.admin.name = displayName;
 
-  // حسابات الطاقم الأكاديمي/الإداري تبقى معلّقة بانتظار موافقة الإدارة قبل دخول لوحاتها
-  if (profile && profile.category === 'staff' && profile.approval_status === 'pending') {
-    go('pending-approval');
+  await loadLiveData();
+
+  // المتدربون (فقط) يكملون العمر/الوزن/الدبلوم أول مرة يسجلون دخول — الطاقم الأكاديمي/الإداري يدخل مباشرة
+  if (profile && profile.category === 'trainee' && profile.role === 'client' && profile.age == null) {
+    go('complete-profile');
     return;
   }
   setRole((profile && profile.role) || 'client');
+}
+
+// ---------------------------------------------------------
+// تحويل صفوف Supabase إلى الشكل الذي تتوقعه شاشات الواجهة
+// ---------------------------------------------------------
+function mapClass(r){ return { id:r.id, name:r.name, type:r.type, trainer:r.trainer_name, day:r.day, time:r.time, duration:r.duration, capacity:r.capacity, booked:r.booked, location:r.location }; }
+function mapSlot(r){ return { id:r.id, trainer:r.trainer_name, date:r.slot_date, time:r.slot_time, type:r.session_type, isBooked:r.is_booked }; }
+function mapOffer(r){ return { id:r.id, title:r.title, audience:r.audience, status:r.status, sent:(r.created_at||'').slice(0,10), reach:r.reach }; }
+function mapBooking(r){ return { id:r.id, classId:r.class_id, slotId:r.slot_id, title:r.title, date:r.booking_date, time:r.booking_time, trainer:r.trainer_name, status:r.status }; }
+function mapInbody(r){ return { id:r.id, date:r.record_date, weight:r.weight, muscle:r.muscle, fat:r.fat }; }
+function mapProgram(r){ return { id:r.id, type:r.type, title:r.title, trainer:r.trainer_name, date:r.program_date, notes:r.notes }; }
+function mapTicket(r){ return { id:r.id, category:r.category, subject:r.subject, status:r.status, date:(r.created_at||'').slice(0,10), reply:r.reply, userId:r.user_id }; }
+function mapNotif(r){ return { id:r.id, title:r.title, body:r.body, type:r.type, read:r.read, time:relTimeAr(r.created_at) }; }
+
+function relTimeAr(iso){
+  if (!iso) return '';
+  const diffMs = Date.now() - new Date(iso).getTime();
+  const mins = Math.floor(diffMs / 60000);
+  if (mins < 1) return 'الآن';
+  if (mins < 60) return `قبل ${mins} دقيقة`;
+  const hrs = Math.floor(mins / 60);
+  if (hrs < 24) return hrs === 1 ? 'قبل ساعة' : `قبل ${hrs} ساعات`;
+  const days = Math.floor(hrs / 24);
+  if (days === 1) return 'أمس';
+  return `قبل ${days} أيام`;
+}
+
+// يحمّل الكتالوج المشترك (كلاسات/مواعيد خاصة/عروض/تذاكر) وبيانات المستخدم الخاصة (حجوزاته، قياساته، برامجه، إشعاراته)
+async function loadLiveData(){
+  if (typeof sb === 'undefined' || !state.authUser) return;
+  const uid = state.authUser.id;
+  const isAdminUser = state.authProfile && state.authProfile.role === 'admin';
+
+  const [classesRes, slotsRes, offersRes, ticketsRes, bookingsRes, inbodyRes, programsRes, notifRes] = await Promise.all([
+    sb.from('classes').select('*').order('day'),
+    sb.from('private_slots').select('*').order('created_at'),
+    sb.from('offers').select('*').order('created_at', { ascending: false }),
+    sb.from('tickets').select('*').order('created_at', { ascending: false }),
+    isAdminUser ? Promise.resolve({ data: [], error: null }) : sb.from('bookings').select('*').eq('user_id', uid).order('created_at', { ascending: false }),
+    isAdminUser ? Promise.resolve({ data: [], error: null }) : sb.from('inbody_records').select('*').eq('user_id', uid).order('record_date'),
+    isAdminUser ? Promise.resolve({ data: [], error: null }) : sb.from('programs').select('*').eq('user_id', uid).order('program_date', { ascending: false }),
+    isAdminUser ? Promise.resolve({ data: [], error: null }) : sb.from('notifications').select('*').eq('user_id', uid).order('created_at', { ascending: false }),
+  ]);
+
+  if (!classesRes.error && classesRes.data) DB.classes = classesRes.data.map(mapClass);
+  if (!slotsRes.error && slotsRes.data) DB.privateSlots = slotsRes.data.map(mapSlot);
+  if (!offersRes.error && offersRes.data) DB.offers = offersRes.data.map(mapOffer);
+  if (!ticketsRes.error && ticketsRes.data) DB.tickets = ticketsRes.data.map(mapTicket);
+  if (!isAdminUser) {
+    if (!bookingsRes.error && bookingsRes.data) DB.bookings = bookingsRes.data.map(mapBooking);
+    if (!inbodyRes.error && inbodyRes.data) DB.inbody = inbodyRes.data.map(mapInbody);
+    if (!programsRes.error && programsRes.data) DB.programs = programsRes.data.map(mapProgram);
+    if (!notifRes.error && notifRes.data) DB.notifications = notifRes.data.map(mapNotif);
+  }
 }
 
 async function realSignIn(){
@@ -190,13 +250,30 @@ async function realSignIn(){
 }
 window.realSignIn = realSignIn;
 
+// حسابات تجريبية جاهزة للنقر المباشر (تحتاج إنشاءها مرة واحدة عبر نموذج التسجيل الحقيقي)
+const DEMO_ACCOUNTS = [
+  { label: 'دخول كمتدرب (تجريبي)', email: 'demo.trainee@aol.edu.sa', password: 'Demo@12345' },
+  { label: 'دخول كطاقم أكاديمي (تجريبي)', email: 'demo.staff@aol.edu.sa', password: 'Demo@12345' },
+  { label: 'دخول كإدارة (تجريبي)', email: 'demo.admin@aol.edu.sa', password: 'Demo@12345' },
+];
+async function quickLogin(email, password){
+  state.authBusy = true; state.authError = ''; render();
+  const { data, error } = await sb.auth.signInWithPassword({ email, password });
+  state.authBusy = false;
+  if (error) {
+    state.authError = 'هذا الحساب التجريبي غير موجود بعد — أنشئيه أولاً من تبويب "إنشاء حساب جديد" بنفس البريد وكلمة المرور المذكورَين';
+    render();
+    return;
+  }
+  await loadProfileAndEnter(data.user);
+}
+window.quickLogin = quickLogin;
+
 async function realSignUp(){
   const name = document.getElementById('auth-name').value.trim();
   const email = document.getElementById('auth-email').value.trim();
   const password = document.getElementById('auth-password').value;
   const category = state.authCategory || 'trainee';
-  const ageVal = category === 'trainee' ? document.getElementById('auth-age')?.value.trim() : '';
-  const weightVal = category === 'trainee' ? document.getElementById('auth-weight')?.value.trim() : '';
 
   if (!name || !email || !password) { state.authError = 'الرجاء تعبئة جميع الحقول'; render(); return; }
   if (password.length < 6) { state.authError = 'كلمة المرور يجب أن تكون 6 أحرف على الأقل'; render(); return; }
@@ -205,7 +282,7 @@ async function realSignUp(){
   state.authBusy = true; state.authError = ''; render();
   const { data, error } = await sb.auth.signUp({
     email, password,
-    options: { data: { full_name: name, category, age: ageVal || null, weight: weightVal || null } }
+    options: { data: { full_name: name, category } }
   });
   state.authBusy = false;
   if (error) {
@@ -289,17 +366,42 @@ function setupAuthListener(){
   });
 }
 
-function toggleBooking(classId){
-  if(state.bookedClassIds.has(classId)){
-    state.bookedClassIds.delete(classId);
+async function toggleBooking(classId){
+  const c = DB.classes.find(x=>x.id===classId);
+  if(!c) return;
+  const existing = DB.bookings.find(b=>b.classId===classId && b.status==='مؤكد');
+  if (existing) {
+    const { error } = await sb.from('bookings').delete().eq('id', existing.id);
+    if (error) { toast('حدث خطأ: ' + error.message); return; }
     toast('تم إلغاء الحجز');
   } else {
-    state.bookedClassIds.add(classId);
+    const { error } = await sb.from('bookings').insert({
+      user_id: state.authUser.id, class_id: c.id, title: c.name,
+      booking_date: c.day, booking_time: c.time, trainer_name: c.trainer, status: 'مؤكد'
+    });
+    if (error) { toast('حدث خطأ: ' + error.message); return; }
     toast('تم تأكيد الحجز بنجاح');
   }
+  await loadLiveData();
   render();
 }
 window.toggleBooking = toggleBooking;
+
+async function bookPrivateSlot(slotId){
+  const s = DB.privateSlots.find(x=>x.id===slotId);
+  if(!s || s.isBooked) return;
+  const { error: insErr } = await sb.from('bookings').insert({
+    user_id: state.authUser.id, slot_id: s.id, title: s.type,
+    booking_date: s.date, booking_time: s.time, trainer_name: s.trainer, status: 'مؤكد'
+  });
+  if (insErr) { toast('حدث خطأ: ' + insErr.message); return; }
+  const { error: updErr } = await sb.from('private_slots').update({ is_booked: true }).eq('id', s.id);
+  if (updErr) { toast('حدث خطأ: ' + updErr.message); return; }
+  toast('تم تأكيد حجز الموعد الخاص');
+  await loadLiveData();
+  render();
+}
+window.bookPrivateSlot = bookPrivateSlot;
 
 function joinTrack(trackId){
   const t = DB.tracks.find(x=>x.id===trackId);
@@ -307,12 +409,16 @@ function joinTrack(trackId){
 }
 window.joinTrack = joinTrack;
 
-function submitTicket(){
+async function submitTicket(){
   const subj = document.getElementById('tk-subject').value.trim();
   const msg = document.getElementById('tk-message').value.trim();
   if(!subj || !msg){ toast('الرجاء تعبئة كل الحقول'); return; }
-  DB.tickets.unshift({ id:'tk-'+Math.floor(Math.random()*900+100), category: state.ticketDraft.category, subject: subj, status:'قيد المعالجة', date:new Date().toISOString().slice(0,10), reply:null });
+  const { error } = await sb.from('tickets').insert({
+    user_id: state.authUser.id, category: state.ticketDraft.category, subject: subj, message: msg
+  });
+  if (error) { toast('حدث خطأ: ' + error.message); return; }
   toast('تم إرسال طلبك للدعم الفني');
+  await loadLiveData();
   go('client-support');
 }
 window.submitTicket = submitTicket;
@@ -323,8 +429,12 @@ function setTicketCategory(cat){
 }
 window.setTicketCategory = setTicketCategory;
 
-function markAllRead(){
-  DB.notifications.forEach(n=>n.read=true);
+async function markAllRead(){
+  const unreadIds = DB.notifications.filter(n=>!n.read).map(n=>n.id);
+  if (!unreadIds.length) return;
+  const { error } = await sb.from('notifications').update({ read: true }).in('id', unreadIds);
+  if (error) { toast('حدث خطأ: ' + error.message); return; }
+  await loadLiveData();
   render();
 }
 window.markAllRead = markAllRead;
@@ -340,29 +450,36 @@ function simulateScan(){
 }
 window.simulateScan = simulateScan;
 
-function addOffer(){
+async function addOffer(){
   const title = document.getElementById('offer-title').value.trim();
   if(!title){ toast('الرجاء كتابة عنوان العرض'); return; }
-  DB.offers.unshift({ id:'o'+Math.random().toString(36).slice(2,6), title, audience:'جميع المتدربين', status:'مفعّل', sent:new Date().toISOString().slice(0,10), reach:0 });
+  const { error } = await sb.from('offers').insert({ title, audience:'جميع المتدربين', status:'مفعّل', reach:0 });
+  if (error) { toast('حدث خطأ: ' + error.message); return; }
   toast('تم إرسال العرض للمتدربين');
+  await loadLiveData();
   go('admin-offers');
 }
 window.addOffer = addOffer;
 
-function addClass(){
+async function addClass(){
   const name = document.getElementById('cls-name').value.trim();
   const day = document.getElementById('cls-day').value;
   const time = document.getElementById('cls-time').value.trim();
   if(!name || !time){ toast('الرجاء تعبئة اسم الكلاس والوقت'); return; }
-  DB.classes.unshift({ id:'c'+Math.random().toString(36).slice(2,6), name, type:'عام', trainer:'—', day, time, duration:'45 د', capacity:16, booked:0, location:'الصالة الرئيسية' });
+  const { error } = await sb.from('classes').insert({ name, type:'عام', trainer_name:'—', day, time, duration:'45 د', capacity:16, location:'الصالة الرئيسية' });
+  if (error) { toast('حدث خطأ: ' + error.message); return; }
   toast('تمت إضافة الكلاس للجدول');
+  await loadLiveData();
   go('admin-classes');
 }
 window.addClass = addClass;
 
-function replyTicket(id){
-  const t = DB.tickets.find(x=>x.id===id);
-  if(t){ t.status='تم الرد'; t.reply='شكراً لتواصلك، تم حل المشكلة من قبل فريق الدعم الفني.'; toast('تم إرسال الرد للعميل'); render(); }
+async function replyTicket(id){
+  const { error } = await sb.from('tickets').update({ status:'تم الرد', reply:'شكراً لتواصلك، تم حل المشكلة من قبل فريق الدعم الفني.' }).eq('id', id);
+  if (error) { toast('حدث خطأ: ' + error.message); return; }
+  toast('تم إرسال الرد للعميل');
+  await loadLiveData();
+  render();
 }
 window.replyTicket = replyTicket;
 
@@ -546,13 +663,8 @@ function screenLogin(){
           <button type="button" class="tab ${state.authCategory==='trainee'?'active':''}" onclick="setAuthCategory('trainee')">متدرب</button>
           <button type="button" class="tab ${state.authCategory==='staff'?'active':''}" onclick="setAuthCategory('staff')">طاقم أكاديمي / إداري</button>
         </div>
-        ${state.authCategory==='staff' ? `<div class="sidebar-note" style="margin-top:4px;">حسابات الطاقم تحتاج موافقة الإدارة قبل التفعيل الكامل</div>` : ''}
+        <div class="sidebar-note" style="margin-top:4px;">كلا الفئتين تستفيدان من نفس خدمات الصالة (حجز، قياسات، برامج) — هذا التصنيف للتنظيم الإداري فقط</div>
       </div>
-      ${state.authCategory==='trainee' ? `
-      <div style="display:flex;gap:10px;">
-        <div class="field" style="flex:1;"><label>العمر</label><input id="auth-age" type="number" min="1" max="120" placeholder="مثال: 27" /></div>
-        <div class="field" style="flex:1;"><label>الوزن (كجم)</label><input id="auth-weight" type="number" min="1" max="400" step="0.1" placeholder="مثال: 70" /></div>
-      </div>` : ''}
       ` : ''}
 
       ${state.authError ? `<div style="background:#fdecec;color:var(--danger);border-radius:12px;padding:10px 12px;font-size:12px;margin-bottom:12px;">${state.authError}</div>` : ''}
@@ -562,26 +674,60 @@ function screenLogin(){
         : `<button class="btn btn-primary" ${state.authBusy?'disabled':''} onclick="realSignUp()">${state.authBusy?'جاري الإنشاء...':'إنشاء الحساب'}</button>`
       }
       <div class="sidebar-note" style="text-align:center;">حسابك هنا خاص بك ومحمي — بيانات الدخول تُحفظ بشكل آمن عبر Supabase.</div>
+
+      ${state.authMode==='signin' ? `
+      <div class="section-title" style="margin-top:18px;"><h3>حسابات تجريبية سريعة</h3></div>
+      ${DEMO_ACCOUNTS.map(a=>`<button class="btn btn-outline" style="margin-bottom:8px;" ${state.authBusy?'disabled':''} onclick="quickLogin('${a.email}','${a.password}')">${a.label}</button>`).join('')}
+      <div class="sidebar-note" style="text-align:center;">تحتاجين تنشئي هذه الحسابات مرة واحدة فقط من تبويب "إنشاء حساب جديد"</div>
+      ` : ''}
     </div>
   </div>`;
 }
 
 // =========================================================
-// شاشة انتظار موافقة الإدارة (حسابات الطاقم الأكاديمي/الإداري)
+// إكمال البيانات بعد أول تسجيل دخول (للمتدربين فقط: العمر، الوزن، الدبلوم)
 // =========================================================
-function screenPendingApproval(){
+async function submitCompleteProfile(){
+  const age = document.getElementById('cp-age').value.trim();
+  const weight = document.getElementById('cp-weight').value.trim();
+  const diploma = document.getElementById('cp-diploma').value.trim();
+
+  state.authResetBusy = true; render();
+  const { data, error } = await sb.from('profiles').update({
+    age: age ? Number(age) : null,
+    weight: weight ? Number(weight) : null,
+    diploma: diploma || null,
+  }).eq('id', state.authUser.id).select().single();
+  state.authResetBusy = false;
+
+  if (error) { toast('حدث خطأ أثناء الحفظ: ' + error.message); render(); return; }
+  state.authProfile = data;
+  setRole((data && data.role) || 'client');
+}
+window.submitCompleteProfile = submitCompleteProfile;
+
+function skipCompleteProfile(){
+  setRole((state.authProfile && state.authProfile.role) || 'client');
+}
+window.skipCompleteProfile = skipCompleteProfile;
+
+function screenCompleteProfile(){
   return `<div class="view no-pad" style="display:flex;flex-direction:column;min-height:100%;">
-    <div style="background:linear-gradient(160deg,var(--brand-900),var(--magenta-600) 55%,var(--accent-500));padding:44px 24px 34px;color:#fff;border-radius:0 0 32px 32px;text-align:center;">
-      <div style="width:76px;height:76px;border-radius:18px;background:#fff;display:flex;align-items:center;justify-content:center;margin:0 auto 14px;padding:8px;box-shadow:var(--shadow-md);">
+    <div style="background:linear-gradient(160deg,var(--brand-900),var(--magenta-600) 55%,var(--accent-500));padding:36px 24px 28px;color:#fff;border-radius:0 0 32px 32px;text-align:center;">
+      <div style="width:64px;height:64px;border-radius:16px;background:#fff;display:flex;align-items:center;justify-content:center;margin:0 auto 12px;padding:7px;box-shadow:var(--shadow-md);">
         <img src="${typeof LOGO_DATA_URI!=='undefined'?LOGO_DATA_URI:''}" alt="أكاديمية التعلم" style="width:100%;height:100%;object-fit:contain;" />
       </div>
-      <h1 style="margin:0;font-size:20px;">بانتظار موافقة الإدارة</h1>
+      <h1 style="margin:0;font-size:18px;">آخر خطوة قبل البدء</h1>
+      <p style="margin:6px 0 0;font-size:12.5px;opacity:.85;">أكملي بياناتك الصحية والدراسية لتخصيص برنامجك بشكل أفضل</p>
     </div>
-    <div style="padding:26px 22px;flex:1;text-align:center;">
-      <span class="list-icon" style="width:56px;height:56px;margin:0 auto 14px;">${icon('shield')}</span>
-      <p style="font-size:13.5px;color:var(--ink-700);line-height:1.9;">تم إنشاء حسابك بنجاح كعضو في الطاقم الأكاديمي/الإداري. لأسباب أمنية، تحتاجين موافقة إدارة الأكاديمية قبل الدخول إلى لوحة التحكم الخاصة بدورك.</p>
-      <p style="font-size:12.5px;color:var(--ink-500);margin-top:10px;">سيتم إعلامك بمجرد الموافقة على حسابك — يمكنك المحاولة بتسجيل الدخول لاحقاً.</p>
-      <button class="btn btn-outline" style="margin-top:22px;" onclick="logout()">${icon('logout')} تسجيل الخروج</button>
+    <div style="padding:22px 20px;flex:1;">
+      <div style="display:flex;gap:10px;">
+        <div class="field" style="flex:1;"><label>العمر</label><input id="cp-age" type="number" min="1" max="120" placeholder="مثال: 27" /></div>
+        <div class="field" style="flex:1;"><label>الوزن (كجم)</label><input id="cp-weight" type="number" min="1" max="400" step="0.1" placeholder="مثال: 70" /></div>
+      </div>
+      <div class="field"><label>الدبلوم / التخصص الدراسي</label><input id="cp-diploma" placeholder="مثال: دبلوم إدارة الأعمال" /></div>
+      <button class="btn btn-primary" ${state.authResetBusy?'disabled':''} onclick="submitCompleteProfile()">${state.authResetBusy?'جاري الحفظ...':'متابعة'}</button>
+      <button class="btn btn-outline" style="margin-top:8px;" onclick="skipCompleteProfile()">تخطي الآن</button>
     </div>
   </div>`;
 }
@@ -631,8 +777,8 @@ function screenClientHome(){
         <div class="avatar">${u.initials}</div>
       </div>
       <div class="hero-stats">
-        <div class="hero-stat"><b>${DB.inbody.at(-1).weight}kg</b><span>الوزن الحالي</span></div>
-        <div class="hero-stat"><b>${DB.inbody.at(-1).muscle}%</b><span>الكتلة العضلية</span></div>
+        <div class="hero-stat"><b>${lastInbody().weight}kg</b><span>الوزن الحالي</span></div>
+        <div class="hero-stat"><b>${lastInbody().muscle}%</b><span>الكتلة العضلية</span></div>
         <div class="hero-stat"><b>${upcoming.length}</b><span>حجوزات قادمة</span></div>
       </div>
       <div style="margin-top:14px;"><button class="btn btn-light" onclick="go('client-checkin')">${icon('qr')} عرض رمز الدخول</button></div>
@@ -681,7 +827,7 @@ function screenClientBooking(){
 
     ${state.params.tab==='private' ? `
       <div class="section-title" style="margin-top:6px;"><h3>مواعيد متاحة</h3></div>
-      ${DB.privateSlots.map(s=>`
+      ${DB.privateSlots.filter(s=>!s.isBooked).length===0 ? emptyState('لا توجد مواعيد خاصة متاحة حالياً') : DB.privateSlots.filter(s=>!s.isBooked).map(s=>`
         <div class="card" style="margin-bottom:10px;">
           <div class="list-row" style="border:none;padding:0;">
             <span class="list-icon">${icon('user')}</span>
@@ -689,7 +835,7 @@ function screenClientBooking(){
           </div>
           <div style="display:flex;align-items:center;justify-content:space-between;margin-top:10px;">
             <span class="badge badge-blue">${icon('clock')} ${s.date} · ${s.time}</span>
-            <button class="btn btn-primary btn-sm" onclick="toast('تم إرسال طلب الحجز للمدرب')">احجز الآن</button>
+            <button class="btn btn-primary btn-sm" onclick="bookPrivateSlot('${s.id}')">احجز الآن</button>
           </div>
         </div>`).join('')}
     ` : `
@@ -697,7 +843,7 @@ function screenClientBooking(){
         ${days.map(d=>`<button class="day-pill ${d===activeDay?'active':''}" onclick="go('client-booking',{tab:'group',day:'${d}'})"><b>${d.slice(0,3)}</b><span>${DB.classes.filter(c=>c.day===d).length} كلاس</span></button>`).join('')}
       </div>
       ${list.length===0 ? emptyState('لا توجد كلاسات مجدولة في هذا اليوم') : list.map(c=>{
-        const booked = state.bookedClassIds.has(c.id);
+        const booked = DB.bookings.some(b=>b.classId===c.id && b.status==='مؤكد');
         const full = c.booked>=c.capacity && !booked;
         return `<div class="card" style="margin-bottom:10px;">
           <div style="display:flex;justify-content:space-between;align-items:flex-start;">
@@ -750,13 +896,20 @@ function screenClientProfile(){
 
     <div class="section-title"><h3>وصول سريع</h3></div>
     <div class="card">
-      <div class="list-row" onclick="go('client-inbody')" style="cursor:pointer;"><span class="list-icon">${icon('chart')}</span><span class="meta"><b>القياسات الصحية (InBody)</b><span>آخر قياس: ${DB.inbody.at(-1).date}</span></span><span>${icon('chevron')}</span></div>
+      <div class="list-row" onclick="go('client-inbody')" style="cursor:pointer;"><span class="list-icon">${icon('chart')}</span><span class="meta"><b>القياسات الصحية (InBody)</b><span>آخر قياس: ${lastInbody().date}</span></span><span>${icon('chevron')}</span></div>
       <div class="list-row" onclick="go('client-programs')" style="cursor:pointer;"><span class="list-icon">${icon('dumbbell')}</span><span class="meta"><b>برامجي التدريبية والغذائية</b><span>${DB.programs.length} برامج نشطة</span></span><span>${icon('chevron')}</span></div>
     </div>
   </div>`;
 }
 
 function screenClientInbody(){
+  if (!DB.inbody || !DB.inbody.length) {
+    return `<div class="view">
+      ${backBar('القياسات الصحية InBody','client-profile')}
+      ${emptyState('لا توجد قياسات InBody مسجّلة لك بعد — احجزي موعد قياس مع مدربك ليظهر هنا')}
+      <button class="btn btn-outline" style="margin-top:14px;" onclick="toast('تم إرسال طلب حجز قياس InBody جديد للمدرب')">${icon('plus')} حجز موعد قياس جديد</button>
+    </div>`;
+  }
   const last = DB.inbody.at(-1); const first = DB.inbody[0];
   const weightDelta = (last.weight-first.weight).toFixed(1);
   const fatDelta = (last.fat-first.fat).toFixed(1);
@@ -764,9 +917,9 @@ function screenClientInbody(){
   return `<div class="view">
     ${backBar('القياسات الصحية InBody','client-profile')}
     <div class="stat-grid">
-      <div class="stat-box"><div class="n">${last.weight} كجم</div><div class="l">الوزن الحالي</div><span class="delta ${weightDelta<0?'up':'down'}">${weightDelta} كجم منذ مارس</span></div>
-      <div class="stat-box"><div class="n">${last.muscle}%</div><div class="l">الكتلة العضلية</div><span class="delta up">+${muscleDelta}% تحسّن</span></div>
-      <div class="stat-box"><div class="n">${last.fat}%</div><div class="l">نسبة الدهون</div><span class="delta up">${fatDelta}% انخفاض</span></div>
+      <div class="stat-box"><div class="n">${last.weight} كجم</div><div class="l">الوزن الحالي</div><span class="delta ${weightDelta<0?'up':'down'}">${weightDelta} كجم منذ أول قياس</span></div>
+      <div class="stat-box"><div class="n">${last.muscle}%</div><div class="l">الكتلة العضلية</div><span class="delta up">${muscleDelta}% تغيّر</span></div>
+      <div class="stat-box"><div class="n">${last.fat}%</div><div class="l">نسبة الدهون</div><span class="delta up">${fatDelta}% تغيّر</span></div>
       <div class="stat-box"><div class="n">${DB.inbody.length}</div><div class="l">قياسات مسجّلة</div><span class="delta" style="color:var(--ink-500);">آخرها ${last.date}</span></div>
     </div>
 
@@ -797,6 +950,7 @@ function screenClientInbody(){
 function screenClientPrograms(){
   return `<div class="view">
     ${backBar('برامجي التدريبية والغذائية','client-profile')}
+    ${!DB.programs.length ? emptyState('لا توجد برامج تدريبية أو غذائية مخصّصة لك بعد') : ''}
     ${DB.programs.map(p=>`
       <div class="card" style="margin-bottom:10px;">
         <div style="display:flex;justify-content:space-between;align-items:flex-start;">
@@ -864,11 +1018,11 @@ function screenClientSubscription(){
 function screenClientHistory(){
   return `<div class="view">
     ${backBar('سجل الحضور والإنجاز','client-subscription')}
-    <div class="card">
+    ${!DB.bookings.length ? emptyState('لا يوجد سجل حجوزات بعد') : `<div class="card">
       ${DB.bookings.map(b=>`
         <div class="list-row"><span class="list-icon">${icon(b.status==='ملغي'?'x':'check')}</span><span class="meta"><b>${b.title}</b><span>${b.date} · ${b.time} · ${b.trainer}</span></span>
         <span class="badge ${b.status==='مؤكد'?'badge-green':b.status==='منتهي'?'badge-gray':'badge-red'}">${b.status}</span></div>`).join('')}
-    </div>
+    </div>`}
   </div>`;
 }
 
@@ -877,6 +1031,7 @@ function screenClientSupport(){
     ${backBar('الدعم الفني والشكاوى','client-more')}
     <button class="btn btn-primary" onclick="go('client-support-new')">${icon('plus')} فتح طلب دعم جديد</button>
     <div class="section-title"><h3>طلباتي</h3></div>
+    ${!DB.tickets.length ? emptyState('لا توجد طلبات دعم سابقة') : ''}
     ${DB.tickets.map(t=>`
       <div class="card" style="margin-bottom:10px;">
         <div style="display:flex;justify-content:space-between;align-items:flex-start;">
@@ -909,14 +1064,14 @@ function screenClientNotifications(){
   return `<div class="view">
     ${backBar('الإشعارات','client-more')}
     <div style="text-align:left;margin-bottom:6px;"><span class="link" style="cursor:pointer;" onclick="markAllRead()">تعليم الكل كمقروء</span></div>
-    <div class="card">
+    ${!DB.notifications.length ? emptyState('لا توجد إشعارات حالياً') : `<div class="card">
       ${DB.notifications.map(n=>`
         <div class="list-row">
           <span class="list-icon">${icon(n.type==='booking'?'calendar':n.type==='billing'?'wallet':n.type==='offer'?'megaphone':'support')}</span>
           <span class="meta"><b>${n.title} ${!n.read?'<span class=\"notice-dot\" style=\"display:inline-block;margin-right:5px;\"></span>':''}</b><span>${n.body}</span></span>
           <span style="font-size:10px;color:var(--ink-300);white-space:nowrap;">${n.time}</span>
         </div>`).join('')}
-    </div>
+    </div>`}
   </div>`;
 }
 
@@ -979,7 +1134,7 @@ function screenTrainerHome(){
     </div>
     <div class="section-title"><h3>الجلسات الخاصة اليوم</h3></div>
     <div class="card">
-      ${DB.privateSlots.map(s=>`<div class="list-row"><span class="list-icon">${icon('user')}</span><span class="meta"><b>${s.type}</b><span>${s.date} · ${s.time}</span></span><span class="badge badge-green">مؤكد</span></div>`).join('')}
+      ${DB.privateSlots.map(s=>`<div class="list-row"><span class="list-icon">${icon('user')}</span><span class="meta"><b>${s.type}</b><span>${s.date} · ${s.time}</span></span><span class="badge ${s.isBooked?'badge-green':'badge-gray'}">${s.isBooked?'محجوز':'متاح'}</span></div>`).join('')}
     </div>
     <div class="section-title"><h3>كلاساتي الجماعية هذا الأسبوع</h3></div>
     <div class="card">
@@ -1221,7 +1376,6 @@ function screenAdminPermissions(){
       <span class="meta"><b style="display:block;font-size:14px;">${a.name}</b><span style="font-size:12px;color:var(--ink-500);">${a.title}</span></span>
       <button class="btn btn-danger-ghost btn-sm" onclick="logout()">${icon('logout')} خروج</button>
     </div>
-    <button class="btn btn-primary" style="margin-top:12px;" onclick="openAdminApprovals()">${icon('shield')} طلبات تسجيل الطاقم المعلّقة</button>
     <div class="section-title"><h3>الأدوار الأساسية</h3></div>
     ${DB.roles.map(r=>`
       <div class="card" style="margin-bottom:10px;">
@@ -1241,67 +1395,12 @@ function screenAdminPermissions(){
   </div>`;
 }
 
-// ---------------------------------------------------------
-// طلبات تسجيل الطاقم الأكاديمي/الإداري المعلّقة (موافقة الإدارة)
-// ---------------------------------------------------------
-async function openAdminApprovals(){
-  go('admin-approvals');
-  state.pendingApprovals = null; // جاري التحميل
-  render();
-  try {
-    const { data, error } = await sb.from('profiles')
-      .select('*')
-      .eq('category', 'staff')
-      .eq('approval_status', 'pending')
-      .order('created_at', { ascending: true });
-    state.pendingApprovals = error ? [] : (data || []);
-  } catch (e) {
-    state.pendingApprovals = [];
-  }
-  if (state.route === 'admin-approvals') render();
-}
-window.openAdminApprovals = openAdminApprovals;
-
-async function approveStaff(profileId, role){
-  const { error } = await sb.from('profiles').update({ role, approval_status: 'approved' }).eq('id', profileId);
-  if (error) { toast('حدث خطأ: ' + error.message); return; }
-  toast(role === 'admin' ? 'تم قبول الحساب كإدارة' : 'تم قبول الحساب كمدرب');
-  openAdminApprovals();
-}
-window.approveStaff = approveStaff;
-
-async function rejectStaff(profileId){
-  const { error } = await sb.from('profiles').update({ approval_status: 'rejected' }).eq('id', profileId);
-  if (error) { toast('حدث خطأ: ' + error.message); return; }
-  toast('تم رفض الطلب');
-  openAdminApprovals();
-}
-window.rejectStaff = rejectStaff;
-
-function screenAdminApprovals(){
-  const list = state.pendingApprovals;
-  return `<div class="view">
-    ${backBar('طلبات الطاقم المعلّقة', 'admin-permissions')}
-    ${list === null ? `<div class="card" style="text-align:center;color:var(--ink-500);font-size:13px;">جاري التحميل...</div>` : ''}
-    ${list !== null && list.length === 0 ? `<div class="card" style="text-align:center;color:var(--ink-500);font-size:13px;">لا توجد طلبات معلّقة حالياً</div>` : ''}
-    ${list && list.length ? list.map(p => `
-      <div class="card" style="margin-bottom:10px;">
-        <span class="meta"><b style="display:block;font-size:14px;">${p.full_name || 'بدون اسم'}</b><span style="font-size:12px;color:var(--ink-500);">${p.age ? 'العمر: ' + p.age : ''}${p.age && p.weight ? ' · ' : ''}${p.weight ? 'الوزن: ' + p.weight + 'كجم' : ''}</span></span>
-        <div style="display:flex;gap:8px;margin-top:10px;flex-wrap:wrap;">
-          <button class="btn btn-primary btn-sm" onclick="approveStaff('${p.id}','trainer')">${icon('check')} قبول كمدرب</button>
-          <button class="btn btn-outline btn-sm" onclick="approveStaff('${p.id}','admin')">${icon('shield')} قبول كإداري</button>
-          <button class="btn btn-danger-ghost btn-sm" onclick="rejectStaff('${p.id}')">${icon('x')} رفض</button>
-        </div>
-      </div>`).join('') : ''}
-  </div>`;
-}
-
 // =========================================================
 // الموجّه الرئيسي (Router)
 // =========================================================
 const SCREENS = {
   'login': screenLogin,
-  'pending-approval': screenPendingApproval,
+  'complete-profile': screenCompleteProfile,
   'forgot-password': screenForgotPassword,
   'reset-password': screenResetPassword,
   'client-home': screenClientHome,
@@ -1327,7 +1426,6 @@ const SCREENS = {
   'admin-checkin': screenAdminCheckin,
   'admin-support': screenAdminSupport,
   'admin-permissions': screenAdminPermissions,
-  'admin-approvals': screenAdminApprovals,
 };
 
 function render(){
