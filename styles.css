@@ -1,45 +1,51 @@
 /* =========================================================
-   نظام التصميم - تطبيق إدارة الصالة الرياضية (FitPulse)
+   نظام التصميم — AOL GYM (صالة أكاديمية التعلّم)
+   مبني على الهوية البصرية المعتمدة: فحمي / كحلي / برتقالي / وردي / بنفسجي / أزرق — خط Cairo
    ========================================================= */
 
 @import url('https://fonts.googleapis.com/css2?family=Cairo:wght@400;500;600;700;800;900&display=swap');
 
 :root{
-  /* Brand palette — مُستخرجة من شعار أكاديمية التعلم (أزرق / وردي-ماجنتا / برتقالي) */
-  --brand-950:#082238;
-  --brand-900:#0b2f4d;
-  --brand-800:#0f3f66;
-  --brand-700:#125485;
-  --brand-600:#166fac;
-  --brand-500:#2f96d1;
-  --brand-400:#5ab3e0;
-  --brand-300:#8ecbec;
-  --magenta-700:#8a0f50;
-  --magenta-600:#a8135f;
-  --magenta-500:#c2126f;
-  --magenta-400:#d94a8c;
-  --accent-500:#f2801e;
-  --accent-600:#e0680a;
+  /* الهوية البصرية المعتمدة لـ AOL GYM — فحمي / كحلي / برتقالي / وردي / بنفسجي / أزرق (Cairo) */
+  --brand-950:#0c1420;
+  --brand-900:#18253a; /* كحلي رسمي */
+  --brand-800:#1b3a55;
+  --brand-700:#1c5478;
+  --brand-600:#1c74a0;
+  --brand-500:#2996c4;
+  --brand-400:#32bef0; /* أزرق رسمي */
+  --brand-300:#8adcf7;
+  --brand-100:#e3f5fc;
+  --violet-700:#5e2766;
+  --violet-600:#82368c; /* بنفسجي رسمي */
+  --violet-500:#9a52a3;
+  --violet-400:#b57cbd;
+  --magenta-700:#960a3b;
+  --magenta-600:#d20d52; /* وردي رسمي */
+  --magenta-500:#df3670;
+  --magenta-400:#e8698f;
+  --accent-600:#d6860a;
+  --accent-500:#f9a01b; /* برتقالي رسمي */
   --success-600:#1a9c6b;
   --success-500:#22b37d;
 
-  --ink-950:#0e1a22;
-  --ink-900:#16262f;
-  --ink-700:#3d4f58;
-  --ink-500:#647680;
-  --ink-300:#9cadb5;
-  --ink-200:#c9d4d9;
-  --ink-100:#e6edf0;
-  --ink-50:#f4f8fa;
+  --ink-950:#221f1e;
+  --ink-900:#383432; /* فحمي رسمي */
+  --ink-700:#5b5551;
+  --ink-500:#87817c;
+  --ink-300:#b6afa9;
+  --ink-200:#d8d2cc;
+  --ink-100:#ece7e2;
+  --ink-50:#f7f4f1;
 
   --surface:#ffffff;
-  --surface-alt:#f4f8fa;
-  --surface-sunken:#edf3f6;
-  --border:#e0e8ec;
+  --surface-alt:#f7f4f1;
+  --surface-sunken:#efeae5;
+  --border:#e4ded8;
 
   --danger:#e5484d;
-  --warning:#f2a71a;
-  --info:#2f8fd6;
+  --warning:#f9a01b;
+  --info:#32bef0;
 
   --radius-sm:10px;
   --radius-md:16px;
@@ -57,7 +63,7 @@
 html,body{margin:0; padding:0;}
 body{
   font-family:var(--font-ar);
-  background:#e7ece9;
+  background:var(--ink-50);
   color:var(--ink-900);
   direction:rtl;
   -webkit-font-smoothing:antialiased;
@@ -222,7 +228,7 @@ a{text-decoration:none; color:inherit;}
 }
 .navitem svg{width:22px; height:22px;}
 .navitem.active{color:var(--brand-600);}
-.navitem.active .navicon{background:var(--brand-50, #e7f6ee);}
+.navitem.active .navicon{background:var(--brand-100);}
 
 /* ---------- Cards & components ---------- */
 .card{
@@ -241,7 +247,7 @@ a{text-decoration:none; color:inherit;}
 .section-title .link{font-size:12.5px; color:var(--brand-600); font-weight:700;}
 
 .hero-card{
-  background:linear-gradient(135deg, var(--brand-800), var(--magenta-600) 58%, var(--accent-500));
+  background:linear-gradient(135deg, var(--brand-900), var(--magenta-600) 45%, var(--violet-600) 70%, var(--accent-500));
   border-radius:var(--radius-xl);
   padding:20px;
   color:#fff;
@@ -369,7 +375,7 @@ a{text-decoration:none; color:inherit;}
 .install-banner{
   display:flex; align-items:center; gap:10px;
   margin:0 14px 4px; padding:10px 12px;
-  background:linear-gradient(120deg, var(--brand-700), var(--magenta-600) 70%, var(--accent-600));
+  background:linear-gradient(120deg, var(--brand-800), var(--magenta-600) 50%, var(--violet-600) 75%, var(--accent-600));
   border-radius:16px; color:#fff; position:relative; z-index:30; flex-shrink:0;
   animation:fadeUp .3s ease both;
 }

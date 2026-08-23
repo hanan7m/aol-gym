@@ -703,12 +703,9 @@ function backBar(title, backRoute){
 // =========================================================
 function screenLogin(){
   return `<div class="view no-pad" style="display:flex;flex-direction:column;min-height:100%;">
-    <div style="background:linear-gradient(160deg,var(--brand-900),var(--magenta-600) 55%,var(--accent-500));padding:44px 24px 34px;color:#fff;border-radius:0 0 32px 32px;">
-      <div style="width:76px;height:76px;border-radius:18px;background:#fff;display:flex;align-items:center;justify-content:center;margin-bottom:14px;padding:8px;box-shadow:var(--shadow-md);">
-        <img src="${typeof LOGO_DATA_URI!=='undefined'?LOGO_DATA_URI:''}" alt="أكاديمية التعلم" style="width:100%;height:100%;object-fit:contain;" />
-      </div>
-      <h1 style="margin:0;font-size:24px;">AOL GYM</h1>
-      <div style="font-size:11.5px;opacity:.8;margin-top:2px;">تطبيق صالة أكاديمية التعلم</div>
+    <div style="background:var(--brand-900);padding:44px 24px 34px;color:#fff;border-radius:0 0 32px 32px;">
+      <img src="${typeof LOGO_DATA_URI!=='undefined'?LOGO_DATA_URI:''}" alt="AOL GYM" style="height:56px;width:auto;display:block;margin-bottom:14px;" />
+      <div style="font-size:12px;opacity:.85;">تطبيق صالة أكاديمية التعلم</div>
       <p style="margin:6px 0 0;font-size:13px;opacity:.85;line-height:1.8;">تطبيق صالة أكاديمية التعلم الرياضية — متاح مجاناً لجميع المتدربين والطاقم الإداري، للحجز والمتابعة الصحية والتدريبية.</p>
     </div>
     <div style="padding:22px 20px;flex:1;">
@@ -783,10 +780,8 @@ window.skipCompleteProfile = skipCompleteProfile;
 
 function screenCompleteProfile(){
   return `<div class="view no-pad" style="display:flex;flex-direction:column;min-height:100%;">
-    <div style="background:linear-gradient(160deg,var(--brand-900),var(--magenta-600) 55%,var(--accent-500));padding:36px 24px 28px;color:#fff;border-radius:0 0 32px 32px;text-align:center;">
-      <div style="width:64px;height:64px;border-radius:16px;background:#fff;display:flex;align-items:center;justify-content:center;margin:0 auto 12px;padding:7px;box-shadow:var(--shadow-md);">
-        <img src="${typeof LOGO_DATA_URI!=='undefined'?LOGO_DATA_URI:''}" alt="أكاديمية التعلم" style="width:100%;height:100%;object-fit:contain;" />
-      </div>
+    <div style="background:var(--brand-900);padding:36px 24px 28px;color:#fff;border-radius:0 0 32px 32px;text-align:center;">
+      <img src="${typeof LOGO_DATA_URI!=='undefined'?LOGO_DATA_URI:''}" alt="AOL GYM" style="height:40px;width:auto;display:block;margin:0 auto 12px;" />
       <h1 style="margin:0;font-size:18px;">آخر خطوة قبل البدء</h1>
       <p style="margin:6px 0 0;font-size:12.5px;opacity:.85;">أكملي بياناتك الصحية والدراسية لتخصيص برنامجك بشكل أفضل</p>
     </div>
