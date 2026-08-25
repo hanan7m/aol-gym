@@ -131,7 +131,8 @@ state.authUser = null;
 state.authProfile = null;
 state.authBusy = false;
 state.authMode = 'signin'; // 'signin' | 'signup'
-state.authCategory = 'trainee'; // 'trainee' | 'staff'
+state.authCategory = 'trainee'; // 'trainee' | 'staff' | 'trainer'
+state.authBranch = null; // 'فرع الفرسان' | 'فرع الرياض'
 state.authError = '';
 
 function setAuthMode(mode){
@@ -146,6 +147,12 @@ function setAuthCategory(cat){
   render();
 }
 window.setAuthCategory = setAuthCategory;
+
+function setAuthBranch(branch){
+  state.authBranch = branch;
+  render();
+}
+window.setAuthBranch = setAuthBranch;
 
 const OWNER_EMAIL = 'hanan.h.almaymuni@gmail.com';
 const ALLOWED_DOMAIN = 'aol.edu.sa';
@@ -297,6 +304,7 @@ window.realSignIn = realSignIn;
 const DEMO_ACCOUNTS = [
   { label: 'دخول كمتدرب (تجريبي)', email: 'demo.trainee@aol.edu.sa', password: 'Demo@12345' },
   { label: 'دخول كطاقم أكاديمي (تجريبي)', email: 'demo.staff@aol.edu.sa', password: 'Demo@12345' },
+  { label: 'دخول كمدرب رياضي (تجريبي)', email: 'demo.trainer@aol.edu.sa', password: 'Demo@12345' },
   { label: 'دخول كإدارة (تجريبي)', email: 'demo.admin@aol.edu.sa', password: 'Demo@12345' },
 ];
 async function quickLogin(email, password){
@@ -317,15 +325,17 @@ async function realSignUp(){
   const email = document.getElementById('auth-email').value.trim();
   const password = document.getElementById('auth-password').value;
   const category = state.authCategory || 'trainee';
+  const branch = state.authBranch;
 
   if (!name || !email || !password) { state.authError = 'الرجاء تعبئة جميع الحقول'; render(); return; }
   if (password.length < 6) { state.authError = 'كلمة المرور يجب أن تكون 6 أحرف على الأقل'; render(); return; }
   if (!isAllowedEmail(email)) { state.authError = `التسجيل متاح فقط للبريد الإلكتروني الرسمي ضمن نطاق @${ALLOWED_DOMAIN}`; render(); return; }
+  if (!branch) { state.authError = 'الرجاء اختيار الفرع'; render(); return; }
 
   state.authBusy = true; state.authError = ''; render();
   const { data, error } = await sb.auth.signUp({
     email, password,
-    options: { data: { full_name: name, category } }
+    options: { data: { full_name: name, category, branch } }
   });
   state.authBusy = false;
   if (error) {
@@ -487,6 +497,7 @@ async function submitTicket(){
   });
   if (error) { toast('حدث خطأ: ' + error.message); return; }
   toast('تم إرسال طلبك للدعم الفني');
+  state.ticketDraft = { category: 'فني', subject: '', message: '' };
   await loadLiveData();
   go('client-support');
 }
@@ -497,6 +508,18 @@ function setTicketCategory(cat){
   render();
 }
 window.setTicketCategory = setTicketCategory;
+
+function requestBranchChange(){
+  const current = (state.authProfile && state.authProfile.branch) || '';
+  const other = BRANCHES.find(b=>b!==current) || BRANCHES[0];
+  state.ticketDraft = {
+    category: 'إداري',
+    subject: 'طلب تغيير الفرع',
+    message: `أرغب بتغيير فرعي الحالي (${current}) إلى (${other}).`
+  };
+  go('client-support-new');
+}
+window.requestBranchChange = requestBranchChange;
 
 async function markAllRead(){
   const unreadIds = DB.notifications.filter(n=>!n.read).map(n=>n.id);
@@ -729,8 +752,16 @@ function screenLogin(){
         <div class="tabs" style="margin-top:0;">
           <button type="button" class="tab ${state.authCategory==='trainee'?'active':''}" onclick="setAuthCategory('trainee')">متدرب</button>
           <button type="button" class="tab ${state.authCategory==='staff'?'active':''}" onclick="setAuthCategory('staff')">طاقم أكاديمي / إداري</button>
+          <button type="button" class="tab ${state.authCategory==='trainer'?'active':''}" onclick="setAuthCategory('trainer')">مدرب رياضي</button>
         </div>
-        <div class="sidebar-note" style="margin-top:4px;">كلا الفئتين تستفيدان من نفس خدمات الصالة (حجز، قياسات، برامج) — هذا التصنيف للتنظيم الإداري فقط</div>
+        <div class="sidebar-note" style="margin-top:4px;">${state.authCategory==='trainer' ? 'حساب المدرب الرياضي له شاشاته الخاصة (الجدول، المتدربون، التقييمات)' : 'المتدرب والطاقم الأكاديمي/الإداري يستفيدان من نفس خدمات الصالة (حجز، قياسات، برامج) — هذا التصنيف للتنظيم الإداري فقط'}</div>
+      </div>
+      <div class="field">
+        <label>الفرع</label>
+        <div class="tabs" style="margin-top:0;">
+          ${BRANCHES.map(b=>`<button type="button" class="tab ${state.authBranch===b?'active':''}" onclick="setAuthBranch('${b}')">${b}</button>`).join('')}
+        </div>
+        <div class="sidebar-note" style="margin-top:4px;">يُحدَّد الفرع مرة واحدة عند التسجيل. لتغييره لاحقاً يلزم رفع تذكرة دعم فني لتقوم الإدارة بتغييره.</div>
       </div>
       ` : ''}
 
@@ -882,13 +913,14 @@ function screenClientHome(){
 function screenClientBooking(){
   const days = DB.weekDays;
   const activeDay = state.params.day || days[0];
-  const activeBranch = state.params.branch || BRANCHES[0];
+  const activeBranch = (state.authProfile && state.authProfile.branch) || BRANCHES[0];
   const list = DB.classes.filter(c=>c.day===activeDay && c.branch===activeBranch);
   const slots = DB.privateSlots.filter(s=>!s.isBooked && s.branch===activeBranch);
   return `<div class="view">
     ${topBar('الحجوزات', 'استكشف الكلاسات الجماعية والجلسات الخاصة')}
-    <div class="seg" style="margin-bottom:10px;">
-      ${BRANCHES.map(b=>`<button class="seg-opt ${activeBranch===b?'active':''}" onclick="go('client-booking',{tab:'${state.params.tab||'group'}',day:'${activeDay}',branch:'${b}'})">${b}</button>`).join('')}
+    <div class="card" style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;padding:10px 14px;">
+      <span style="font-size:13px;"><b>${icon('location')} ${activeBranch}</b></span>
+      <span class="link" style="font-size:12px;" onclick="requestBranchChange()">طلب تغيير الفرع</span>
     </div>
     <div style="font-size:11px;color:var(--ink-500);margin:-4px 0 10px;">${icon('shield')} الفرعان مخصصان للنساء حالياً</div>
     <div class="tabs">
@@ -1125,8 +1157,8 @@ function screenClientSupportNew(){
     <div class="field"><label>نوع الطلب</label>
       <div class="seg">${cats.map(c=>`<button class="seg-opt ${state.ticketDraft.category===c?'active':''}" onclick="setTicketCategory('${c}')">${c}</button>`).join('')}</div>
     </div>
-    <div class="field"><label>عنوان الطلب</label><input id="tk-subject" placeholder="مثال: مشكلة في تسجيل الحضور" /></div>
-    <div class="field"><label>تفاصيل الطلب</label><textarea id="tk-message" placeholder="اكتب وصفاً تفصيلياً..."></textarea></div>
+    <div class="field"><label>عنوان الطلب</label><input id="tk-subject" placeholder="مثال: مشكلة في تسجيل الحضور" value="${state.ticketDraft.subject||''}" /></div>
+    <div class="field"><label>تفاصيل الطلب</label><textarea id="tk-message" placeholder="اكتب وصفاً تفصيلياً...">${state.ticketDraft.message||''}</textarea></div>
     <button class="btn btn-primary" onclick="submitTicket()">${icon('check')} إرسال الطلب</button>
   </div>`;
 }
