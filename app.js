@@ -283,18 +283,20 @@ async function loadLiveData(){
 
 // يحمّل بيانات لوحة الإدارة (الفريق، الصلاحيات، سجل الحضور، الإحصائيات) — للأدمن فقط
 async function loadAdminData(){
-  const [staffRes, rolesRes, logRes, statsRes, bookingsCountRes, newMembersRes] = await Promise.all([
+  const [staffRes, rolesRes, logRes, statsRes, bookingsCountRes, newMembersRes, trainersRes] = await Promise.all([
     sb.from('staff_members').select('*').order('sort_order'),
     sb.from('access_roles').select('*').order('sort_order'),
     sb.from('attendance_log').select('*').order('occurred_at', { ascending: false }).limit(20),
     sb.from('admin_stats').select('*').eq('id', 1).maybeSingle(),
     sb.from('bookings').select('id', { count: 'exact', head: true }).eq('status', 'مؤكد'),
     sb.from('profiles').select('id', { count: 'exact', head: true }).gte('created_at', new Date(Date.now() - 7*24*60*60*1000).toISOString()),
+    sb.from('profiles').select('id, full_name').eq('role', 'trainer').order('full_name'),
   ]);
 
   if (!staffRes.error && staffRes.data) DB.staff = staffRes.data.map(mapStaff);
   if (!rolesRes.error && rolesRes.data) DB.roles = rolesRes.data.map(mapRole);
   if (!logRes.error && logRes.data) DB.attendanceLog = logRes.data.map(mapAttendance);
+  DB.trainers = (!trainersRes.error && trainersRes.data) ? trainersRes.data.map(t=>t.full_name).filter(Boolean) : [];
 
   const s = (!statsRes.error && statsRes.data) ? statsRes.data : null;
   DB.attendanceTrend = s ? (s.attendance_trend || []) : [];
@@ -574,19 +576,60 @@ async function addOffer(){
 }
 window.addOffer = addOffer;
 
-async function addClass(){
+state.editingClass = null;
+
+function openNewClass(){
+  state.editingClass = null;
+  go('admin-classes-new');
+}
+window.openNewClass = openNewClass;
+
+function openEditClass(id){
+  state.editingClass = DB.classes.find(c=>c.id===id) || null;
+  go('admin-classes-new');
+}
+window.openEditClass = openEditClass;
+
+function formatTimeAr(hhmm){
+  if (!hhmm) return '';
+  const [h,m] = hhmm.split(':').map(Number);
+  if (isNaN(h)) return hhmm;
+  const period = h >= 12 ? 'م' : 'ص';
+  const h12 = ((h % 12) || 12);
+  return `${String(h12).padStart(2,'0')}:${String(m||0).padStart(2,'0')} ${period}`;
+}
+
+async function saveClass(){
   const name = document.getElementById('cls-name').value.trim();
   const branch = document.getElementById('cls-branch').value;
   const day = document.getElementById('cls-day').value;
-  const time = document.getElementById('cls-time').value.trim();
-  if(!name || !time){ toast('الرجاء تعبئة اسم الكلاس والوقت'); return; }
-  const { error } = await sb.from('classes').insert({ name, type:'عام', trainer_name:'—', day, time, duration:'45 د', capacity:16, location:'الصالة الرئيسية', branch });
+  const timeRaw = document.getElementById('cls-time').value;
+  const trainer = document.getElementById('cls-trainer').value;
+  const capacity = Number(document.getElementById('cls-capacity').value) || 16;
+  if(!name || !timeRaw){ toast('الرجاء تعبئة اسم الصف الرياضي والوقت'); return; }
+  const time = formatTimeAr(timeRaw);
+  const editing = state.editingClass;
+
+  const { error } = editing
+    ? await sb.from('classes').update({ name, trainer_name: trainer, day, time, capacity, branch }).eq('id', editing.id)
+    : await sb.from('classes').insert({ name, type:'عام', trainer_name: trainer, day, time, duration:'45 د', capacity, location:'الصالة الرئيسية', branch });
+
   if (error) { toast('حدث خطأ: ' + error.message); return; }
-  toast('تمت إضافة الكلاس للجدول');
+  toast(editing ? 'تم تحديث الصف الرياضي' : 'تمت إضافة الصف الرياضي للجدول');
+  state.editingClass = null;
   await loadLiveData();
   go('admin-classes');
 }
-window.addClass = addClass;
+window.saveClass = saveClass;
+
+async function deleteClass(id){
+  const { error } = await sb.from('classes').delete().eq('id', id);
+  if (error) { toast('حدث خطأ: ' + error.message); return; }
+  toast('تم حذف الصف الرياضي من الجدول');
+  await loadLiveData();
+  render();
+}
+window.deleteClass = deleteClass;
 
 async function replyTicket(id){
   const { error } = await sb.from('tickets').update({ status:'تم الرد', reply:'شكراً لتواصلك، تم حل المشكلة من قبل فريق الدعم الفني.' }).eq('id', id);
@@ -729,8 +772,8 @@ function bottomNav(){
 function superAdminBar(){
   if (!(state.authProfile && state.authProfile.is_super_admin)) return '';
   const roles = [ ['client','عميل'], ['trainer','مدرب'], ['admin','إدارة'] ];
-  return `<div style="position:absolute; top:50px; left:50%; transform:translateX(-50%); z-index:45; display:flex; gap:4px; background:rgba(15,20,30,.88); backdrop-filter:blur(10px); padding:4px; border-radius:12px; box-shadow:var(--shadow-md);">
-    ${roles.map(([r,label])=>`<button onclick="setRole('${r}')" style="border:none; border-radius:9px; padding:6px 10px; font-size:10.5px; font-weight:800; cursor:pointer; background:${state.role===r?'#fff':'transparent'}; color:${state.role===r?'var(--brand-700)':'#fff'};">${label}</button>`).join('')}
+  return `<div style="position:absolute; bottom:76px; left:12px; z-index:45; display:flex; flex-direction:column; gap:3px; background:rgba(15,20,30,.9); backdrop-filter:blur(10px); padding:4px; border-radius:12px; box-shadow:var(--shadow-md);">
+    ${roles.map(([r,label])=>`<button onclick="setRole('${r}')" style="border:none; border-radius:9px; padding:6px 10px; font-size:10.5px; font-weight:800; cursor:pointer; background:${state.role===r?'#fff':'transparent'}; color:${state.role===r?'var(--brand-700)':'#fff'}; white-space:nowrap;">${label}</button>`).join('')}
   </div>`;
 }
 
@@ -1375,38 +1418,54 @@ function screenAdminDashboard(){
 
 function screenAdminClasses(){
   return `<div class="view">
-    ${topBar('إدارة الكلاسات', DB.classes.length + ' كلاس مجدول')}
-    <button class="btn btn-primary" onclick="go('admin-classes-new')">${icon('plus')} إضافة كلاس جديد</button>
+    ${topBar('إدارة الصفوف الرياضية', DB.classes.length + ' صف رياضي مجدول')}
+    <button class="btn btn-primary" onclick="openNewClass()">${icon('plus')} إضافة صف رياضي جديد</button>
     <div class="section-title"><h3>الجدول الأسبوعي</h3><span class="link" onclick="go('admin-offers')">العروض ←</span></div>
-    ${DB.classes.map(c=>`
+    ${DB.classes.length ? DB.classes.map(c=>`
       <div class="card" style="margin-bottom:10px;">
         <div style="display:flex;justify-content:space-between;align-items:flex-start;">
           <div>
             <span class="badge badge-gray">${c.day}</span>
             <span class="badge badge-blue">${c.branch}</span>
             <h4 style="margin:8px 0 2px;font-size:14.5px;">${c.name}</h4>
-            <div class="info">${icon('user')} ${c.trainer} · ${icon('clock')} ${c.time}</div>
+            <div class="info">${icon('user')} ${c.trainer||'—'} · ${icon('clock')} ${c.time}</div>
           </div>
           <span class="badge ${c.booked>=c.capacity?'badge-red':'badge-green'}">${c.booked}/${c.capacity}</span>
         </div>
         <div class="btn-row" style="margin-top:10px;">
-          <button class="btn btn-outline btn-sm" onclick="toast('تم فتح نموذج تعديل الكلاس')">${icon('edit')} تعديل</button>
-          <button class="btn btn-danger-ghost btn-sm" onclick="toast('تم حذف الكلاس من الجدول')">${icon('x')} إلغاء</button>
+          <button class="btn btn-outline btn-sm" onclick="openEditClass('${c.id}')">${icon('edit')} تعديل</button>
+          <button class="btn btn-danger-ghost btn-sm" onclick="deleteClass('${c.id}')">${icon('x')} إلغاء</button>
         </div>
-      </div>`).join('')}
+      </div>`).join('') : emptyState('لا توجد صفوف رياضية مجدولة بعد')}
   </div>`;
 }
 
+function parseTimeToHHMM(arTime){
+  if (!arTime) return '';
+  const m = arTime.match(/(\d{1,2}):(\d{2})\s*(ص|م)?/);
+  if (!m) return '';
+  let h = Number(m[1]); const min = m[2]; const period = m[3];
+  if (period === 'م' && h < 12) h += 12;
+  if (period === 'ص' && h === 12) h = 0;
+  return `${String(h).padStart(2,'0')}:${min}`;
+}
+
 function screenAdminClassesNew(){
+  const editing = state.editingClass;
+  const trainers = (DB.trainers && DB.trainers.length) ? DB.trainers : (editing && editing.trainer ? [editing.trainer] : []);
   return `<div class="view">
-    ${backBar('إضافة كلاس جديد','admin-classes')}
-    <div class="field"><label>اسم الكلاس</label><input id="cls-name" placeholder="مثال: يوغا مسائية" /></div>
-    <div class="field"><label>الفرع</label><select id="cls-branch">${BRANCHES.map(b=>`<option>${b}</option>`).join('')}</select></div>
-    <div class="field"><label>اليوم</label><select id="cls-day">${DB.weekDays.map(d=>`<option>${d}</option>`).join('')}</select></div>
-    <div class="field"><label>الوقت</label><input id="cls-time" placeholder="مثال: 06:00 م" /></div>
-    <div class="field"><label>المدرب</label><select><option>عبدالله المطيري</option><option>نورة الحربي</option><option>ريم الدوسري</option><option>فهد العنزي</option></select></div>
-    <div class="field"><label>السعة القصوى</label><input type="number" placeholder="16" /></div>
-    <button class="btn btn-primary" onclick="addClass()">${icon('check')} حفظ ونشر الكلاس</button>
+    ${backBar(editing ? 'تعديل الصف الرياضي' : 'إضافة صف رياضي جديد','admin-classes')}
+    <div class="field"><label>اسم الصف الرياضي</label><input id="cls-name" placeholder="مثال: يوغا مسائية" value="${editing?editing.name:''}" /></div>
+    <div class="field"><label>الفرع</label><select id="cls-branch">${BRANCHES.map(b=>`<option ${editing&&editing.branch===b?'selected':''}>${b}</option>`).join('')}</select></div>
+    <div class="field"><label>اليوم</label><select id="cls-day">${DB.weekDays.map(d=>`<option ${editing&&editing.day===d?'selected':''}>${d}</option>`).join('')}</select></div>
+    <div class="field"><label>الوقت</label><input type="time" id="cls-time" value="${editing?parseTimeToHHMM(editing.time):''}" /></div>
+    <div class="field"><label>المدرب</label>
+      <select id="cls-trainer">
+        ${trainers.length ? trainers.map(t=>`<option ${editing&&editing.trainer===t?'selected':''}>${t}</option>`).join('') : '<option value="">لا يوجد مدربون مسجّلون بعد</option>'}
+      </select>
+    </div>
+    <div class="field"><label>السعة القصوى</label><input type="number" id="cls-capacity" placeholder="16" value="${editing?editing.capacity:16}" /></div>
+    <button class="btn btn-primary" onclick="saveClass()">${icon('check')} ${editing ? 'حفظ التعديلات' : 'حفظ ونشر الصف الرياضي'}</button>
   </div>`;
 }
 
@@ -1421,14 +1480,14 @@ function screenAdminOffers(){
       <button class="btn btn-accent" onclick="addOffer()">${icon('megaphone')} إرسال الإشعار الآن</button>
     </div>
     <div class="section-title"><h3>العروض المرسلة</h3></div>
-    ${DB.offers.map(o=>`
+    ${DB.offers.length ? DB.offers.map(o=>`
       <div class="card" style="margin-bottom:10px;">
         <div style="display:flex;justify-content:space-between;align-items:center;">
           <div><b style="font-size:13.5px;">${o.title}</b><div style="font-size:11px;color:var(--ink-500);margin-top:2px;">${o.audience} · ${o.sent}</div></div>
           <span class="badge ${o.status==='مفعّل'?'badge-green':'badge-gray'}">${o.status}</span>
         </div>
         <div style="font-size:11px;color:var(--ink-500);margin-top:8px;">${icon('users')} وصل إلى ${o.reach} عضو</div>
-      </div>`).join('')}
+      </div>`).join('') : emptyState('لا توجد عروض مُرسلة بعد')}
 
     <div class="section-title"><h3>تقييمات المدربين</h3></div>
     <div class="card">
@@ -1464,18 +1523,12 @@ function screenAdminReports(){
 
     <div class="section-title"><h3>ملخص الالتزام الشهري للمتدربين</h3></div>
     <div class="card">
-      <table class="mini-table">
-        <tr><th>الشهر</th><th>متدربون جدد</th><th>جلسات مكتملة</th><th>معدل الحضور</th></tr>
-        <tr><td>يونيو</td><td>21</td><td>452</td><td>78%</td></tr>
-        <tr><td>يوليو</td><td>24</td><td>486</td><td>80%</td></tr>
-        <tr><td>أغسطس</td><td>27</td><td>512</td><td>82%</td></tr>
-      </table>
+      ${emptyState('لا تتوفر بيانات كافية بعد لعرض ملخص شهري')}
     </div>
 
     <div class="section-title"><h3>أرشيف التقارير الصحية للأعضاء</h3></div>
     <div class="card">
-      <div class="list-row"><span class="list-icon">${icon('file')}</span><span class="meta"><b>تقرير القياسات الشهري - أغسطس</b><span>142 عضو · تم التوليد تلقائياً</span></span><span>${icon('download')}</span></div>
-      <div class="list-row"><span class="list-icon">${icon('file')}</span><span class="meta"><b>خطط تدريبية نشطة</b><span>89 خطة موزعة على المدربين</span></span><span>${icon('download')}</span></div>
+      ${emptyState('لا توجد تقارير مؤرشفة بعد')}
     </div>
   </div>`;
 }
@@ -1498,16 +1551,23 @@ function screenAdminCheckin(){
   </div>`;
 }
 
+state.adminTicketFilter = 'الكل';
+function setAdminTicketFilter(cat){
+  state.adminTicketFilter = cat;
+  render();
+}
+window.setAdminTicketFilter = setAdminTicketFilter;
+
 function screenAdminSupport(){
+  const filter = state.adminTicketFilter || 'الكل';
+  const cats = ['الكل','فني','إداري','ملاحظات','اقتراحات'];
+  const filtered = filter === 'الكل' ? DB.tickets : DB.tickets.filter(t=>t.category===filter);
   return `<div class="view">
     ${topBar('تذاكر الدعم الفني', DB.tickets.filter(t=>t.status!=='مغلقة').length + ' تذكرة نشطة')}
     <div class="tabs">
-      <button class="tab active">الكل</button>
-      <button class="tab">فني</button>
-      <button class="tab">إداري</button>
-      <button class="tab">اقتراحات</button>
+      ${cats.map(c=>`<button class="tab ${filter===c?'active':''}" onclick="setAdminTicketFilter('${c}')">${c}</button>`).join('')}
     </div>
-    ${DB.tickets.map(t=>`
+    ${filtered.length ? filtered.map(t=>`
       <div class="card" style="margin-bottom:10px;">
         <div style="display:flex;justify-content:space-between;align-items:flex-start;">
           <div><span class="badge badge-gray">${t.category}</span><div style="font-weight:700;font-size:13.5px;margin-top:6px;">${t.subject}</div><div style="font-size:11px;color:var(--ink-500);margin-top:2px;">${t.id} · ${t.date}</div></div>
@@ -1515,7 +1575,7 @@ function screenAdminSupport(){
         </div>
         ${t.reply?`<div style="background:var(--surface-sunken);border-radius:12px;padding:10px 12px;margin-top:10px;font-size:12px;line-height:1.7;">${t.reply}</div>`:`
         <button class="btn btn-primary btn-sm" style="margin-top:10px;" onclick="replyTicket('${t.id}')">${icon('check')} إرسال رد جاهز</button>`}
-      </div>`).join('')}
+      </div>`).join('') : emptyState('لا توجد تذاكر في هذا التصنيف')}
   </div>`;
 }
 
@@ -1543,9 +1603,36 @@ function screenAdminPermissions(){
         <div class="list-row"><span class="trainer-avatar">${s.name.split(' ').map(w=>w[0]).slice(0,2).join('')}</span>
         <span class="meta"><b>${s.name}</b><span>${s.role}</span></span><span class="badge badge-blue">${s.access}</span></div>`).join('') : emptyState('لا يوجد أعضاء فريق بعد')}
     </div>
-    <button class="btn btn-outline" style="margin-top:14px;" onclick="toast('تم فتح نموذج دعوة عضو جديد للفريق')">${icon('plus')} دعوة عضو جديد للفريق</button>
+    <button class="btn btn-outline" style="margin-top:14px;" onclick="openInviteStaffSheet()">${icon('plus')} دعوة عضو جديد للفريق</button>
   </div>`;
 }
+
+function openInviteStaffSheet(){
+  const accessOptions = (DB.roles && DB.roles.length) ? DB.roles.map(r=>r.role) : ['متدرب','مدرب','إدارة'];
+  openSheet(`
+    <h3>دعوة عضو جديد للفريق</h3>
+    <div class="muted">يُضاف مباشرة إلى قائمة أعضاء الفريق وصلاحياته</div>
+    <div class="field"><label>الاسم</label><input id="staff-name" placeholder="مثال: سارة العتيبي" /></div>
+    <div class="field"><label>المسمى الوظيفي</label><input id="staff-role" placeholder="مثال: مديرة العمليات" /></div>
+    <div class="field"><label>مستوى الوصول</label><select id="staff-access">${accessOptions.map(a=>`<option>${a}</option>`).join('')}</select></div>
+    <button class="btn btn-primary" onclick="submitInviteStaff()">${icon('check')} إضافة العضو</button>
+  `);
+}
+window.openInviteStaffSheet = openInviteStaffSheet;
+
+async function submitInviteStaff(){
+  const name = document.getElementById('staff-name').value.trim();
+  const role = document.getElementById('staff-role').value.trim();
+  const access = document.getElementById('staff-access').value;
+  if (!name || !role) { toast('الرجاء تعبئة الاسم والمسمى الوظيفي'); return; }
+  const { error } = await sb.from('staff_members').insert({ name, role, access, sort_order: (DB.staff.length || 0) + 1 });
+  if (error) { toast('حدث خطأ: ' + error.message); return; }
+  toast('تمت إضافة العضو للفريق');
+  closeSheet();
+  await loadLiveData();
+  render();
+}
+window.submitInviteStaff = submitInviteStaff;
 
 // =========================================================
 // الموجّه الرئيسي (Router)
