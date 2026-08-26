@@ -290,10 +290,23 @@ async function loadLiveData(){
   }
 }
 
-// يحمّل قائمة المتدربين الحقيقيين لشاشة "عملائي" الخاصة بالمدرب
+// يحمّل قائمة المتدربين الحقيقيين وطلبات قياس InBody المعلّقة لشاشات المدرب
 async function loadTrainerData(){
-  const { data, error } = await sb.from('profiles').select('id, full_name, phone, branch').eq('role', 'client').order('full_name');
-  DB.realClients = (!error && data) ? data : [];
+  const [clientsRes, requestsRes] = await Promise.all([
+    sb.from('profiles').select('id, full_name, phone, branch').eq('role', 'client').order('full_name'),
+    sb.from('inbody_requests').select('*').eq('status', 'pending').order('created_at'),
+  ]);
+  DB.realClients = (!clientsRes.error && clientsRes.data) ? clientsRes.data : [];
+
+  let requests = [];
+  if (!requestsRes.error && requestsRes.data && requestsRes.data.length) {
+    const ids = [...new Set(requestsRes.data.map(r => r.user_id))];
+    const { data: reqProfiles } = await sb.from('profiles').select('id, full_name').in('id', ids);
+    const nameById = {};
+    (reqProfiles || []).forEach(p => { nameById[p.id] = p.full_name; });
+    requests = requestsRes.data.map(r => ({ id: r.id, userId: r.user_id, fullName: nameById[r.user_id] || '—', date: (r.created_at || '').slice(0, 10) }));
+  }
+  DB.inbodyRequests = requests;
 }
 
 // يحمّل بيانات لوحة الإدارة (الفريق، الصلاحيات، سجل الحضور، الإحصائيات) — للأدمن فقط
@@ -1329,6 +1342,20 @@ function screenClientCheckin(){
 }
 
 function screenClientMore(){
+  if (state.role === 'trainer') {
+    const t = state.authProfile || {};
+    const items = [
+      { icon:'bell', label:'الإشعارات', route:'client-notifications' },
+      { icon:'support', label:'الدعم الفني والشكاوى', route:'client-support' },
+    ];
+    return `<div class="view">
+      ${topBar('المزيد', t.full_name || DB.users.trainer.name)}
+      <div class="card">
+        ${items.map(i=>`<div class="list-row" style="cursor:pointer;" onclick="go('${i.route}')"><span class="list-icon">${icon(i.icon)}</span><span class="meta"><b>${i.label}</b></span><span>${icon('chevron')}</span></div>`).join('')}
+      </div>
+      <button class="btn btn-danger-ghost" style="margin-top:16px;" onclick="logout()">${icon('logout')} تسجيل الخروج</button>
+    </div>`;
+  }
   const u = DB.users.client;
   const items = [
     { icon:'user', label:'ملفي الشخصي', route:'client-profile' },
@@ -1351,29 +1378,43 @@ function screenClientMore(){
 // شاشات المدرب
 // =========================================================
 function screenTrainerHome(){
-  const t = DB.users.trainer;
-  const mySessions = DB.classes.filter(c=>c.trainer.includes('المطيري')||c.trainer==='—').slice(0,4);
+  const p = state.authProfile || {};
+  const trainerName = p.full_name || DB.users.trainer.name;
+  const mySlots = DB.privateSlots.filter(s => s.trainer === trainerName);
+  const myClasses = DB.classes.filter(c => c.trainer === trainerName);
+  const myRating = DB.trainerRatings.find(r => r.trainer === trainerName) || { avg:'—', count:0 };
+  const requests = DB.inbodyRequests || [];
   return `<div class="view">
-    ${topBar('جدول اليوم', t.name)}
+    ${topBar('جدولي', trainerName)}
     <div class="hero-card">
       <div class="hero-top">
-        <div><div style="font-size:13px;opacity:.85;">${t.specialty}</div><div style="font-size:18px;font-weight:800;margin-top:2px;">4 جلسات اليوم</div></div>
-        <div class="avatar">${t.initials}</div>
+        <div><div style="font-size:13px;opacity:.85;">تدريب القوة واللياقة</div><div style="font-size:18px;font-weight:800;margin-top:2px;">${mySlots.length + myClasses.length} جلسة مجدولة</div></div>
+        <div class="avatar">${trainerName.split(' ').map(w=>w[0]).slice(0,2).join('')}</div>
       </div>
       <div class="hero-stats">
-        <div class="hero-stat"><b>28</b><span>عميل نشط</span></div>
-        <div class="hero-stat"><b>4.9</b><span>متوسط التقييم</span></div>
-        <div class="hero-stat"><b>203</b><span>تقييم</span></div>
+        <div class="hero-stat"><b>${(DB.realClients||[]).length}</b><span>متدرب مسجّل</span></div>
+        <div class="hero-stat"><b>${myRating.avg}</b><span>متوسط التقييم</span></div>
+        <div class="hero-stat"><b>${myRating.count}</b><span>تقييم</span></div>
       </div>
     </div>
-    <div class="section-title"><h3>الجلسات الخاصة اليوم</h3></div>
+    ${requests.length ? `
+    <div class="section-title"><h3>طلبات قياس InBody معلّقة</h3></div>
     <div class="card">
-      ${DB.privateSlots.map(s=>`<div class="list-row"><span class="list-icon">${icon('user')}</span><span class="meta"><b>${s.type}</b><span>${s.date} · ${s.time}</span></span><span class="badge ${s.isBooked?'badge-green':'badge-gray'}">${s.isBooked?'محجوز':'متاح'}</span></div>`).join('')}
+      ${requests.map(r=>`
+        <div class="list-row" style="align-items:flex-start;">
+          <span class="list-icon">${icon('chart')}</span>
+          <span class="meta"><b>${r.fullName}</b><span>طلب حجز موعد قياس · ${r.date}</span></span>
+          <button class="btn btn-primary btn-sm" onclick="openAddInbodySheet('${r.userId}','${(r.fullName||'').replace(/'/g,'')}')">${icon('check')} تسجيل القياس</button>
+        </div>`).join('')}
+    </div>` : ''}
+    <div class="section-title"><h3>الجلسات الخاصة</h3></div>
+    <div class="card">
+      ${mySlots.length ? mySlots.map(s=>`<div class="list-row"><span class="list-icon">${icon('user')}</span><span class="meta"><b>${s.type}</b><span>${s.date} · ${s.time}</span></span><span class="badge ${s.isBooked?'badge-green':'badge-gray'}">${s.isBooked?'محجوز':'متاح'}</span></div>`).join('') : emptyState('لا توجد جلسات خاصة مجدولة لك')}
     </div>
-    <div class="section-title"><h3>كلاساتي الجماعية هذا الأسبوع</h3></div>
+    <div class="section-title"><h3>كلاساتي الجماعية</h3></div>
     <div class="card">
-      ${DB.classes.filter(c=>c.trainer.includes('نورة')||c.trainer.includes('عبدالله')).map(c=>`
-        <div class="list-row"><span class="list-icon">${icon('calendar')}</span><span class="meta"><b>${c.name}</b><span>${c.day} · ${c.time}</span></span><span class="badge badge-blue">${c.booked}/${c.capacity}</span></div>`).join('')}
+      ${myClasses.length ? myClasses.map(c=>`
+        <div class="list-row"><span class="list-icon">${icon('calendar')}</span><span class="meta"><b>${c.name}</b><span>${c.day} · ${c.time}</span></span><span class="badge badge-blue">${c.booked}/${c.capacity}</span></div>`).join('') : emptyState('لا توجد كلاسات جماعية مسندة لك')}
     </div>
   </div>`;
 }
@@ -1398,19 +1439,18 @@ function screenTrainerClients(){
 }
 
 function screenTrainerRatings(){
-  const me = DB.trainerRatings.find(r=>r.trainer==='عبدالله المطيري') || { avg:'—', count:0 };
+  const p = state.authProfile || {};
+  const trainerName = p.full_name || DB.users.trainer.name;
+  const me = DB.trainerRatings.find(r=>r.trainer===trainerName) || { avg:0, count:0 };
   return `<div class="view">
     ${topBar('تقييماتي', 'آراء العملاء حول جلساتك')}
     <div class="card" style="text-align:center;">
-      <div style="font-size:38px;font-weight:800;color:var(--brand-700);">${me.avg}</div>
+      <div style="font-size:38px;font-weight:800;color:var(--brand-700);">${me.count ? me.avg : '—'}</div>
       <div class="rating">${[1,2,3,4,5].map(i=>`<span>${icon('star')}</span>`).join('')}</div>
       <div style="font-size:12px;color:var(--ink-500);">بناءً على ${me.count} تقييم</div>
     </div>
     <div class="section-title"><h3>آخر التعليقات</h3></div>
-    <div class="card">
-      <div class="list-row"><span class="list-icon">${icon('star')}</span><span class="meta"><b>سارة العتيبي</b><span>"أفضل مدرب تعاملت معه، شرح واضح ومتابعة ممتازة"</span></span></div>
-      <div class="list-row"><span class="list-icon">${icon('star')}</span><span class="meta"><b>خالد العمري</b><span>"برنامج تدريبي فعّال ونتائج ملموسة خلال شهر"</span></span></div>
-    </div>
+    ${emptyState('لا توجد تعليقات مسجّلة بعد')}
   </div>`;
 }
 
@@ -1715,13 +1755,17 @@ window.submitEditProfile = submitEditProfile;
 
 async function requestInbodyMeasurement(){
   if (!state.authUser) { toast('حدث خطأ: لم يتم التعرف على المستخدم'); return; }
-  const { error } = await sb.from('tickets').insert({
-    user_id: state.authUser.id,
-    category: 'إداري',
-    subject: 'طلب حجز موعد قياس InBody جديد',
-    message: 'يرجى التواصل معي لتحديد موعد قياس InBody جديد.',
-  });
-  if (error) { toast('حدث خطأ: ' + error.message); return; }
+  // يُسجَّل الطلب في جدول مخصص يراه المدرب مباشرة في شاشة "جدولي"، مع نسخة كتذكرة دعم للمتابعة الإدارية
+  const [reqRes, ticketRes] = await Promise.all([
+    sb.from('inbody_requests').insert({ user_id: state.authUser.id, status: 'pending' }),
+    sb.from('tickets').insert({
+      user_id: state.authUser.id,
+      category: 'إداري',
+      subject: 'طلب حجز موعد قياس InBody جديد',
+      message: 'يرجى التواصل معي لتحديد موعد قياس InBody جديد.',
+    }),
+  ]);
+  if (reqRes.error) { toast('حدث خطأ: ' + reqRes.error.message); return; }
   toast('تم إرسال طلبك، سيتواصل معك المدرب لتحديد الموعد');
   await loadLiveData();
 }
@@ -1749,8 +1793,11 @@ async function submitAddInbody(clientId){
   if (!weight || !muscle || !fat) { toast('الرجاء تعبئة جميع القياسات'); return; }
   const { error } = await sb.from('inbody_records').insert({ user_id: clientId, weight, muscle, fat });
   if (error) { toast('حدث خطأ: ' + error.message); return; }
+  // إغلاق أي طلب قياس معلّق لهذا المتدرب تلقائياً بعد تسجيل القياس
+  await sb.from('inbody_requests').update({ status: 'fulfilled' }).eq('user_id', clientId).eq('status', 'pending');
   toast('تم حفظ قياس InBody بنجاح');
   closeSheet();
+  await loadLiveData();
   render();
 }
 window.submitAddInbody = submitAddInbody;
