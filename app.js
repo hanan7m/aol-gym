@@ -136,7 +136,7 @@ state.authError = '';
 // بيانات خطوة إكمال الملف الشخصي بعد أول تسجيل دخول (نوع الحساب + الفرع)
 state.cpNeedsCategory = false;
 state.cpCategory = 'trainee'; // 'trainee' | 'staff'
-state.cpBranch = null; // 'فرع الفرسان' | 'فرع الرياض'
+state.cpBranch = null; // 'فرع الدمام' | 'فرع الرياض'
 
 function setAuthMode(mode){
   state.authMode = mode;
@@ -184,9 +184,9 @@ async function loadProfileAndEnter(user){
 
   // نوع الحساب (متدرب/طاقم) والفرع يُختاران بعد تسجيل الدخول لأول مرة (وليس عند التسجيل نفسه)
   const needsCategory = !!(profile && profile.role === 'client' && !profile.branch);
-  // المتدربون (فقط) يكملون العمر/الوزن/الدبلوم أيضاً أول مرة يسجلون دخول — الطاقم الأكاديمي/الإداري يدخل مباشرة بعد اختيار الفرع
-  const needsTraineeExtra = !!(profile && profile.role === 'client' && profile.category === 'trainee' && profile.age == null);
-  if (needsCategory || needsTraineeExtra) {
+  // المتدرب والطاقم الأكاديمي/الإداري كلاهما يكمل العمر/الوزن/الدبلوم أول مرة يسجل دخول
+  const needsExtra = !!(profile && profile.role === 'client' && profile.age == null);
+  if (needsCategory || needsExtra) {
     state.cpNeedsCategory = needsCategory;
     state.cpCategory = (profile && profile.category) || 'trainee';
     state.cpBranch = (profile && profile.branch) || null;
@@ -199,7 +199,22 @@ async function loadProfileAndEnter(user){
 // ---------------------------------------------------------
 // تحويل صفوف Supabase إلى الشكل الذي تتوقعه شاشات الواجهة
 // ---------------------------------------------------------
-const BRANCHES = ['فرع الفرسان', 'فرع الرياض'];
+const BRANCHES = ['فرع الدمام', 'فرع الرياض'];
+const DIPLOMAS = [
+  'دبلوم المحاسبة والضرائب',
+  'دبلوم إدارة الفنادق والمنتجعات السياحية',
+  'دبلوم التسويق والتجارة الإلكترونية',
+  'دبلوم إدارة سلاسل الإمداد والخدمات اللوجستية',
+  'دبلوم التأمين وإدارة المخاطر',
+  'دبلوم إدارة الأعمال',
+  'دبلوم التصميم الجرافيكي',
+  'دبلوم الأمن السيبراني',
+  'دبلوم الذكاء الاصطناعي',
+  'دبلوم السلامة والصحة المهنية',
+  'دبلوم العلاقات العامّة والإعلام',
+  'دبلوم تنظيم وإدارة الفعاليات',
+  'دبلوم الموارد البشرية',
+];
 function mapClass(r){ return { id:r.id, name:r.name, type:r.type, trainer:r.trainer_name, day:r.day, time:r.time, duration:r.duration, capacity:r.capacity, booked:r.booked, location:r.location, branch:r.branch }; }
 function mapSlot(r){ return { id:r.id, trainer:r.trainer_name, date:r.slot_date, time:r.slot_time, type:r.session_type, isBooked:r.is_booked, branch:r.branch }; }
 function mapOffer(r){ return { id:r.id, title:r.title, audience:r.audience, status:r.status, sent:(r.created_at||'').slice(0,10), reach:r.reach }; }
@@ -710,6 +725,15 @@ function bottomNav(){
   return '';
 }
 
+// شريط عائم لحساب "الأدمن التقني" فقط — يسمح بمعاينة التطبيق بأي دور دون تسجيل خروج
+function superAdminBar(){
+  if (!(state.authProfile && state.authProfile.is_super_admin)) return '';
+  const roles = [ ['client','عميل'], ['trainer','مدرب'], ['admin','إدارة'] ];
+  return `<div style="position:absolute; top:50px; left:50%; transform:translateX(-50%); z-index:45; display:flex; gap:4px; background:rgba(15,20,30,.88); backdrop-filter:blur(10px); padding:4px; border-radius:12px; box-shadow:var(--shadow-md);">
+    ${roles.map(([r,label])=>`<button onclick="setRole('${r}')" style="border:none; border-radius:9px; padding:6px 10px; font-size:10.5px; font-weight:800; cursor:pointer; background:${state.role===r?'#fff':'transparent'}; color:${state.role===r?'var(--brand-700)':'#fff'};">${label}</button>`).join('')}
+  </div>`;
+}
+
 function topBar(title, sub, opts={}){
   return `<div class="topbar">
     <div><h1>${title}</h1>${sub?`<div class="sub">${sub}</div>`:''}</div>
@@ -772,7 +796,7 @@ function screenLogin(){
 }
 
 // =========================================================
-// إكمال البيانات بعد أول تسجيل دخول (للمتدربين فقط: العمر، الوزن، الدبلوم)
+// إكمال البيانات بعد أول تسجيل دخول (للمتدرب والطاقم الأكاديمي/الإداري: العمر، الوزن، الدبلوم)
 // =========================================================
 async function submitCompleteProfile(){
   if (state.cpNeedsCategory && !state.cpBranch) { toast('الرجاء اختيار الفرع'); return; }
@@ -782,17 +806,15 @@ async function submitCompleteProfile(){
     update.category = state.cpCategory;
     update.branch = state.cpBranch;
   }
-  if (state.cpCategory === 'trainee') {
-    const ageEl = document.getElementById('cp-age');
-    const weightEl = document.getElementById('cp-weight');
-    const diplomaEl = document.getElementById('cp-diploma');
-    const age = ageEl ? ageEl.value.trim() : '';
-    const weight = weightEl ? weightEl.value.trim() : '';
-    const diploma = diplomaEl ? diplomaEl.value.trim() : '';
-    update.age = age ? Number(age) : null;
-    update.weight = weight ? Number(weight) : null;
-    update.diploma = diploma || null;
-  }
+  const ageEl = document.getElementById('cp-age');
+  const weightEl = document.getElementById('cp-weight');
+  const diplomaEl = document.getElementById('cp-diploma');
+  const age = ageEl ? ageEl.value.trim() : '';
+  const weight = weightEl ? weightEl.value.trim() : '';
+  const diploma = diplomaEl ? diplomaEl.value.trim() : '';
+  update.age = age ? Number(age) : null;
+  update.weight = weight ? Number(weight) : null;
+  update.diploma = diploma || null;
 
   state.authResetBusy = true; render();
   const { data, error } = await sb.from('profiles').update(update).eq('id', state.authUser.id).select().single();
@@ -810,7 +832,6 @@ function skipCompleteProfile(){
 window.skipCompleteProfile = skipCompleteProfile;
 
 function screenCompleteProfile(){
-  const showTraineeFields = state.cpCategory === 'trainee';
   return `<div class="view no-pad" style="display:flex;flex-direction:column;min-height:100%;">
     <div style="background:var(--brand-900);padding:36px 24px 28px;color:#fff;border-radius:0 0 32px 32px;text-align:center;">
       <img src="${typeof LOGO_DATA_URI!=='undefined'?LOGO_DATA_URI:''}" alt="AOL GYM" style="height:40px;width:auto;display:block;margin:0 auto 12px;" />
@@ -835,13 +856,17 @@ function screenCompleteProfile(){
         <div class="sidebar-note" style="margin-top:4px;">يُحدَّد الفرع مرة واحدة. لتغييره لاحقاً يلزم رفع تذكرة دعم فني لتقوم الإدارة بتغييره.</div>
       </div>
       ` : ''}
-      ${showTraineeFields ? `
       <div style="display:flex;gap:10px;">
         <div class="field" style="flex:1;"><label>العمر</label><input id="cp-age" type="number" min="1" max="120" placeholder="مثال: 27" /></div>
         <div class="field" style="flex:1;"><label>الوزن (كجم)</label><input id="cp-weight" type="number" min="1" max="400" step="0.1" placeholder="مثال: 70" /></div>
       </div>
-      <div class="field"><label>الدبلوم / التخصص الدراسي</label><input id="cp-diploma" placeholder="مثال: دبلوم إدارة الأعمال" /></div>
-      ` : ''}
+      <div class="field">
+        <label>الدبلوم / التخصص الدراسي</label>
+        <select id="cp-diploma">
+          <option value="">اختر الدبلوم...</option>
+          ${DIPLOMAS.map(d=>`<option value="${d}">${d}</option>`).join('')}
+        </select>
+      </div>
       <button class="btn btn-primary" ${state.authResetBusy?'disabled':''} onclick="submitCompleteProfile()">${state.authResetBusy?'جاري الحفظ...':'متابعة'}</button>
       ${state.cpNeedsCategory ? '' : `<button class="btn btn-outline" style="margin-top:8px;" onclick="skipCompleteProfile()">تخطي الآن</button>`}
     </div>
@@ -1561,6 +1586,7 @@ function render(){
   $app.innerHTML = `
     <div class="phone-screen">
       ${statusBar()}
+      ${showChrome ? superAdminBar() : ''}
       ${installBanner()}
       <div class="screen-body">
         ${screenFn()}
