@@ -182,6 +182,9 @@ async function loadProfileAndEnter(user){
   DB.users.client.name = displayName;
   DB.users.trainer.name = displayName;
   DB.users.admin.name = displayName;
+  DB.users.client.phone = (profile && profile.phone) || '';
+  DB.users.client.nationalId = (profile && profile.national_id) || '';
+  DB.users.client.email = user.email || '';
 
   await loadLiveData();
 
@@ -282,6 +285,15 @@ async function loadLiveData(){
   if (isAdminUser) {
     await loadAdminData();
   }
+  if (state.authProfile && state.authProfile.role === 'trainer') {
+    await loadTrainerData();
+  }
+}
+
+// يحمّل قائمة المتدربين الحقيقيين لشاشة "عملائي" الخاصة بالمدرب
+async function loadTrainerData(){
+  const { data, error } = await sb.from('profiles').select('id, full_name, phone, branch').eq('role', 'client').order('full_name');
+  DB.realClients = (!error && data) ? data : [];
 }
 
 // يحمّل بيانات لوحة الإدارة (الفريق، الصلاحيات، سجل الحضور، الإحصائيات) — للأدمن فقط
@@ -1074,12 +1086,12 @@ function screenClientProfile(){
       <div style="margin-top:10px;"><span class="badge badge-green">${u.membership.track}</span></div>
     </div>
 
-    <div class="section-title"><h3>المعلومات الأساسية</h3></div>
+    <div class="section-title"><h3>المعلومات الأساسية</h3><span class="link" onclick="openEditProfileSheet()">تعديل</span></div>
     <div class="card">
-      <div class="list-row"><span class="list-icon">${icon('user')}</span><span class="meta"><b>الاسم الكامل</b><span>${u.name}</span></span></div>
-      <div class="list-row"><span class="list-icon">${icon('bell')}</span><span class="meta"><b>رقم الهاتف</b><span>${u.phone}</span></span></div>
-      <div class="list-row"><span class="list-icon">${icon('shield')}</span><span class="meta"><b>رقم الهوية</b><span>${u.nationalId}</span></span></div>
-      <div class="list-row"><span class="list-icon">${icon('file')}</span><span class="meta"><b>البريد الإلكتروني</b><span>${u.email}</span></span></div>
+      <div class="list-row"><span class="list-icon">${icon('user')}</span><span class="meta"><b>الاسم الكامل</b><span>${u.name || '—'}</span></span></div>
+      <div class="list-row"><span class="list-icon">${icon('bell')}</span><span class="meta"><b>رقم الهاتف</b><span>${u.phone || '—'}</span></span></div>
+      <div class="list-row"><span class="list-icon">${icon('shield')}</span><span class="meta"><b>رقم الهوية</b><span>${u.nationalId || '—'}</span></span></div>
+      <div class="list-row"><span class="list-icon">${icon('file')}</span><span class="meta"><b>البريد الإلكتروني</b><span>${u.email || '—'}</span></span></div>
     </div>
 
     <div class="section-title"><h3>رمز الدخول السريع</h3></div>
@@ -1101,7 +1113,7 @@ function screenClientInbody(){
     return `<div class="view">
       ${backBar('القياسات الصحية InBody','client-profile')}
       ${emptyState('لا توجد قياسات InBody مسجّلة لك بعد — احجزي موعد قياس مع مدربك ليظهر هنا')}
-      <button class="btn btn-outline" style="margin-top:14px;" onclick="toast('تم إرسال طلب حجز قياس InBody جديد للمدرب')">${icon('plus')} حجز موعد قياس جديد</button>
+      <button class="btn btn-outline" style="margin-top:14px;" onclick="requestInbodyMeasurement()">${icon('plus')} حجز موعد قياس جديد</button>
     </div>`;
   }
   const last = DB.inbody.at(-1); const first = DB.inbody[0];
@@ -1137,7 +1149,7 @@ function screenClientInbody(){
         ${DB.inbody.slice().reverse().map(d=>`<tr><td>${d.date}</td><td>${d.weight}kg</td><td>${d.muscle}%</td><td>${d.fat}%</td></tr>`).join('')}
       </table>
     </div>
-    <button class="btn btn-outline" style="margin-top:14px;" onclick="toast('تم إرسال طلب حجز قياس InBody جديد للمدرب')">${icon('plus')} حجز موعد قياس جديد</button>
+    <button class="btn btn-outline" style="margin-top:14px;" onclick="requestInbodyMeasurement()">${icon('plus')} حجز موعد قياس جديد</button>
   </div>`;
 }
 
@@ -1339,35 +1351,23 @@ function screenTrainerHome(){
 }
 
 function screenTrainerClients(){
-  const rows = [
-    { name:'سارة العتيبي', plan:'مسار اللياقة والتأهيل', progress:82, last:'اليوم' },
-    { name:'محمد القحطاني', plan:'مسار اللياقة العامة', progress:54, last:'أمس' },
-    { name:'لمى الشمري', plan:'مسار الإعداد الرياضي المتقدم', progress:91, last:'قبل يومين' },
-    { name:'خالد العمري', plan:'مسار اللياقة والتأهيل', progress:38, last:'قبل 5 أيام' },
-  ];
+  const rows = DB.realClients || [];
   return `<div class="view">
-    ${topBar('متدربيّ', rows.length + ' متدرب نشط')}
+    ${topBar('متدربيّ', rows.length + ' متدرب مسجّل')}
+    ${!rows.length ? emptyState('لا يوجد متدربون مسجّلون بعد') : ''}
     ${rows.map(r=>`
       <div class="card" style="margin-bottom:10px;">
         <div class="list-row" style="border:none;padding:0;">
-          <span class="trainer-avatar" style="width:40px;height:40px;">${r.name.split(' ').map(w=>w[0]).slice(0,2).join('')}</span>
-          <span class="meta"><b>${r.name}</b><span>${r.plan} · آخر حضور: ${r.last}</span></span>
+          <span class="trainer-avatar" style="width:40px;height:40px;">${(r.full_name||'—').split(' ').map(w=>w[0]).slice(0,2).join('')}</span>
+          <span class="meta"><b>${r.full_name || '—'}</b><span>${r.branch || '—'}${r.phone ? ' · ' + r.phone : ''}</span></span>
         </div>
-        <div style="margin-top:10px;">
-          <div style="display:flex;justify-content:space-between;font-size:11px;color:var(--ink-500);margin-bottom:4px;"><span>التقدم نحو الهدف</span><span>${r.progress}%</span></div>
-          <div class="progress-track"><div class="progress-fill" style="width:${r.progress}%;"></div></div>
+        <div style="display:flex;gap:8px;margin-top:10px;">
+          <button class="btn btn-outline btn-sm" style="flex:1;" onclick="openAddInbodySheet('${r.id}','${(r.full_name||'').replace(/'/g,'')}')">${icon('chart')} قياس InBody</button>
+          <button class="btn btn-outline btn-sm" style="flex:1;" onclick="openAddProgramSheet('${r.id}','${(r.full_name||'').replace(/'/g,'')}')">${icon('edit')} برنامج / ملاحظة</button>
         </div>
-        <button class="btn btn-outline btn-sm" style="margin-top:10px;" onclick="openSheet(noteSheet('${r.name}'))">${icon('edit')} إضافة ملاحظة تدريبية</button>
       </div>`).join('')}
   </div>`;
 }
-
-function noteSheet(name){
-  return `<h3>ملاحظة تدريبية لـ ${name}</h3><div class="muted">ستظهر هذه الملاحظة في أرشيف العميل فوراً</div>
-    <div class="field"><textarea placeholder="اكتب توصيتك..."></textarea></div>
-    <button class="btn btn-primary" onclick="toast('تم حفظ الملاحظة'); closeSheet();">حفظ الملاحظة</button>`;
-}
-window.noteSheet = noteSheet;
 
 function screenTrainerRatings(){
   const me = DB.trainerRatings.find(r=>r.trainer==='عبدالله المطيري') || { avg:'—', count:0 };
@@ -1419,12 +1419,25 @@ function screenAdminDashboard(){
   </div>`;
 }
 
+state.adminClassBranchFilter = 'الكل';
+function setAdminClassBranchFilter(b){
+  state.adminClassBranchFilter = b;
+  render();
+}
+window.setAdminClassBranchFilter = setAdminClassBranchFilter;
+
 function screenAdminClasses(){
+  const filter = state.adminClassBranchFilter || 'الكل';
+  const filtered = filter === 'الكل' ? DB.classes : DB.classes.filter(c=>c.branch===filter);
   return `<div class="view">
-    ${topBar('إدارة الصفوف الرياضية', DB.classes.length + ' صف رياضي مجدول')}
+    ${topBar('إدارة الصفوف الرياضية', filtered.length + ' صف رياضي مجدول' + (filter==='الكل' ? '' : ' · ' + filter))}
     <button class="btn btn-primary" onclick="openNewClass()">${icon('plus')} إضافة صف رياضي جديد</button>
+    <div class="tabs">
+      <button class="tab ${filter==='الكل'?'active':''}" onclick="setAdminClassBranchFilter('الكل')">الكل (${DB.classes.length})</button>
+      ${BRANCHES.map(b=>`<button class="tab ${filter===b?'active':''}" onclick="setAdminClassBranchFilter('${b}')">${b} (${DB.classes.filter(c=>c.branch===b).length})</button>`).join('')}
+    </div>
     <div class="section-title"><h3>الجدول الأسبوعي</h3><span class="link" onclick="go('admin-offers')">العروض ←</span></div>
-    ${DB.classes.length ? DB.classes.map(c=>`
+    ${filtered.length ? filtered.map(c=>`
       <div class="card" style="margin-bottom:10px;">
         <div style="display:flex;justify-content:space-between;align-items:flex-start;">
           <div>
@@ -1439,7 +1452,7 @@ function screenAdminClasses(){
           <button class="btn btn-outline btn-sm" onclick="openEditClass('${c.id}')">${icon('edit')} تعديل</button>
           <button class="btn btn-danger-ghost btn-sm" onclick="deleteClass('${c.id}')">${icon('x')} إلغاء</button>
         </div>
-      </div>`).join('') : emptyState('لا توجد صفوف رياضية مجدولة بعد')}
+      </div>`).join('') : emptyState('لا توجد صفوف رياضية مجدولة بهذا الفرع')}
   </div>`;
 }
 
@@ -1636,6 +1649,109 @@ async function submitInviteStaff(){
   render();
 }
 window.submitInviteStaff = submitInviteStaff;
+
+function openEditProfileSheet(){
+  const p = state.authProfile || {};
+  const u = DB.users.client;
+  openSheet(`
+    <h3>تعديل المعلومات الأساسية</h3>
+    <div class="muted">البريد الإلكتروني غير قابل للتعديل هنا</div>
+    <div class="field"><label>الاسم الكامل</label><input id="prof-name" value="${p.full_name || u.name || ''}" /></div>
+    <div class="field"><label>رقم الهاتف</label><input id="prof-phone" value="${p.phone || u.phone || ''}" placeholder="05xxxxxxxx" /></div>
+    <div class="field"><label>رقم الهوية</label><input id="prof-national-id" value="${p.national_id || u.nationalId || ''}" placeholder="10xxxxxxxx" /></div>
+    <div class="field"><label>البريد الإلكتروني</label><input value="${u.email || ''}" disabled /></div>
+    <button class="btn btn-primary" onclick="submitEditProfile()">${icon('check')} حفظ التعديلات</button>
+  `);
+}
+window.openEditProfileSheet = openEditProfileSheet;
+
+async function submitEditProfile(){
+  const full_name = document.getElementById('prof-name').value.trim();
+  const phone = document.getElementById('prof-phone').value.trim();
+  const national_id = document.getElementById('prof-national-id').value.trim();
+  if (!full_name) { toast('الرجاء إدخال الاسم الكامل'); return; }
+  if (!state.authUser) { toast('حدث خطأ: لم يتم التعرف على المستخدم'); return; }
+  const { error } = await sb.from('profiles').update({ full_name, phone, national_id }).eq('id', state.authUser.id);
+  if (error) { toast('حدث خطأ: ' + error.message); return; }
+  if (state.authProfile) { state.authProfile.full_name = full_name; state.authProfile.phone = phone; state.authProfile.national_id = national_id; }
+  DB.users.client.name = full_name;
+  DB.users.client.phone = phone;
+  DB.users.client.nationalId = national_id;
+  DB.users.trainer.name = full_name;
+  DB.users.admin.name = full_name;
+  toast('تم حفظ بياناتك بنجاح');
+  closeSheet();
+  render();
+}
+window.submitEditProfile = submitEditProfile;
+
+async function requestInbodyMeasurement(){
+  if (!state.authUser) { toast('حدث خطأ: لم يتم التعرف على المستخدم'); return; }
+  const { error } = await sb.from('tickets').insert({
+    user_id: state.authUser.id,
+    category: 'إداري',
+    subject: 'طلب حجز موعد قياس InBody جديد',
+    message: 'يرجى التواصل معي لتحديد موعد قياس InBody جديد.',
+  });
+  if (error) { toast('حدث خطأ: ' + error.message); return; }
+  toast('تم إرسال طلبك، سيتواصل معك المدرب لتحديد الموعد');
+  await loadLiveData();
+}
+window.requestInbodyMeasurement = requestInbodyMeasurement;
+
+// =========================================================
+// شاشات المدرب — أدوات إدخال حقيقية لبيانات المتدربين
+// =========================================================
+function openAddInbodySheet(clientId, clientName){
+  openSheet(`
+    <h3>قياس InBody جديد — ${clientName}</h3>
+    <div class="muted">سيظهر هذا القياس فوراً في الملف الشخصي للمتدربة/المتدرب</div>
+    <div class="field"><label>الوزن (كجم)</label><input id="ib-weight" type="number" step="0.1" placeholder="مثال: 74.5" /></div>
+    <div class="field"><label>الكتلة العضلية (%)</label><input id="ib-muscle" type="number" step="0.1" placeholder="مثال: 33.2" /></div>
+    <div class="field"><label>نسبة الدهون (%)</label><input id="ib-fat" type="number" step="0.1" placeholder="مثال: 22.8" /></div>
+    <button class="btn btn-primary" onclick="submitAddInbody('${clientId}')">${icon('check')} حفظ القياس</button>
+  `);
+}
+window.openAddInbodySheet = openAddInbodySheet;
+
+async function submitAddInbody(clientId){
+  const weight = parseFloat(document.getElementById('ib-weight').value);
+  const muscle = parseFloat(document.getElementById('ib-muscle').value);
+  const fat = parseFloat(document.getElementById('ib-fat').value);
+  if (!weight || !muscle || !fat) { toast('الرجاء تعبئة جميع القياسات'); return; }
+  const { error } = await sb.from('inbody_records').insert({ user_id: clientId, weight, muscle, fat });
+  if (error) { toast('حدث خطأ: ' + error.message); return; }
+  toast('تم حفظ قياس InBody بنجاح');
+  closeSheet();
+  render();
+}
+window.submitAddInbody = submitAddInbody;
+
+function openAddProgramSheet(clientId, clientName){
+  openSheet(`
+    <h3>برنامج / ملاحظة جديدة — ${clientName}</h3>
+    <div class="muted">سيظهر هذا فوراً ضمن "برامجي التدريبية والغذائية" لدى المتدرب</div>
+    <div class="field"><label>النوع</label><select id="pg-type"><option value="تدريبي">تدريبي</option><option value="غذائي">غذائي</option><option value="ملاحظة">ملاحظة تدريبية</option></select></div>
+    <div class="field"><label>العنوان</label><input id="pg-title" placeholder="مثال: برنامج بناء القوة - المرحلة 1" /></div>
+    <div class="field"><label>التفاصيل</label><textarea id="pg-notes" placeholder="اكتب التفاصيل أو التوصية..."></textarea></div>
+    <button class="btn btn-primary" onclick="submitAddProgram('${clientId}')">${icon('check')} حفظ</button>
+  `);
+}
+window.openAddProgramSheet = openAddProgramSheet;
+
+async function submitAddProgram(clientId){
+  const type = document.getElementById('pg-type').value;
+  const title = document.getElementById('pg-title').value.trim();
+  const notes = document.getElementById('pg-notes').value.trim();
+  if (!title) { toast('الرجاء إدخال العنوان'); return; }
+  const trainerName = (state.authProfile && state.authProfile.full_name) || DB.users.trainer.name;
+  const { error } = await sb.from('programs').insert({ user_id: clientId, type, title, notes, trainer_name: trainerName });
+  if (error) { toast('حدث خطأ: ' + error.message); return; }
+  toast('تم الحفظ بنجاح');
+  closeSheet();
+  render();
+}
+window.submitAddProgram = submitAddProgram;
 
 // =========================================================
 // الموجّه الرئيسي (Router)
