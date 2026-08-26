@@ -2,6 +2,9 @@
 // AOL GYM — تطبيق صالة أكاديمية التعلم الرياضية (نموذج أولي تفاعلي)
 // =========================================================
 
+// النسخة الحقيقية (الموقع المنشور) لا تُظهر أدوات العرض التجريبي — تبقى فقط في نسخة البروتوتايب المستقلة (file:// أو محلياً)
+const IS_DEMO_BUILD = (typeof location !== 'undefined') && (location.protocol === 'file:' || location.hostname === 'localhost' || location.hostname === '127.0.0.1');
+
 const state = {
   role: null,           // 'client' | 'trainer' | 'admin'
   route: 'login',
@@ -829,7 +832,7 @@ function screenLogin(){
       }
       <div class="sidebar-note" style="text-align:center;">حسابك هنا خاص بك ومحمي — بيانات الدخول تُحفظ بشكل آمن عبر Supabase.</div>
 
-      ${state.authMode==='signin' ? `
+      ${state.authMode==='signin' && IS_DEMO_BUILD ? `
       <div class="section-title" style="margin-top:18px;"><h3>حسابات تجريبية سريعة</h3></div>
       ${DEMO_ACCOUNTS.map(a=>`<button class="btn btn-outline" style="margin-bottom:8px;" ${state.authBusy?'disabled':''} onclick="quickLogin('${a.email}','${a.password}')">${a.label}</button>`).join('')}
       <div class="sidebar-note" style="text-align:center;">تحتاجين تنشئي هذه الحسابات مرة واحدة فقط من تبويب "إنشاء حساب جديد"</div>
