@@ -131,9 +131,12 @@ state.authUser = null;
 state.authProfile = null;
 state.authBusy = false;
 state.authMode = 'signin'; // 'signin' | 'signup'
-state.authCategory = 'trainee'; // 'trainee' | 'staff' | 'trainer'
-state.authBranch = null; // 'فرع الفرسان' | 'فرع الرياض'
 state.authError = '';
+
+// بيانات خطوة إكمال الملف الشخصي بعد أول تسجيل دخول (نوع الحساب + الفرع)
+state.cpNeedsCategory = false;
+state.cpCategory = 'trainee'; // 'trainee' | 'staff'
+state.cpBranch = null; // 'فرع الفرسان' | 'فرع الرياض'
 
 function setAuthMode(mode){
   state.authMode = mode;
@@ -142,17 +145,17 @@ function setAuthMode(mode){
 }
 window.setAuthMode = setAuthMode;
 
-function setAuthCategory(cat){
-  state.authCategory = cat;
+function setCpCategory(cat){
+  state.cpCategory = cat;
   render();
 }
-window.setAuthCategory = setAuthCategory;
+window.setCpCategory = setCpCategory;
 
-function setAuthBranch(branch){
-  state.authBranch = branch;
+function setCpBranch(branch){
+  state.cpBranch = branch;
   render();
 }
-window.setAuthBranch = setAuthBranch;
+window.setCpBranch = setCpBranch;
 
 const OWNER_EMAIL = 'hanan.h.almaymuni@gmail.com';
 const ALLOWED_DOMAIN = 'aol.edu.sa';
@@ -179,8 +182,14 @@ async function loadProfileAndEnter(user){
 
   await loadLiveData();
 
-  // المتدربون (فقط) يكملون العمر/الوزن/الدبلوم أول مرة يسجلون دخول — الطاقم الأكاديمي/الإداري يدخل مباشرة
-  if (profile && profile.category === 'trainee' && profile.role === 'client' && profile.age == null) {
+  // نوع الحساب (متدرب/طاقم) والفرع يُختاران بعد تسجيل الدخول لأول مرة (وليس عند التسجيل نفسه)
+  const needsCategory = !!(profile && profile.role === 'client' && !profile.branch);
+  // المتدربون (فقط) يكملون العمر/الوزن/الدبلوم أيضاً أول مرة يسجلون دخول — الطاقم الأكاديمي/الإداري يدخل مباشرة بعد اختيار الفرع
+  const needsTraineeExtra = !!(profile && profile.role === 'client' && profile.category === 'trainee' && profile.age == null);
+  if (needsCategory || needsTraineeExtra) {
+    state.cpNeedsCategory = needsCategory;
+    state.cpCategory = (profile && profile.category) || 'trainee';
+    state.cpBranch = (profile && profile.branch) || null;
     go('complete-profile');
     return;
   }
@@ -324,18 +333,15 @@ async function realSignUp(){
   const name = document.getElementById('auth-name').value.trim();
   const email = document.getElementById('auth-email').value.trim();
   const password = document.getElementById('auth-password').value;
-  const category = state.authCategory || 'trainee';
-  const branch = state.authBranch;
 
   if (!name || !email || !password) { state.authError = 'الرجاء تعبئة جميع الحقول'; render(); return; }
   if (password.length < 6) { state.authError = 'كلمة المرور يجب أن تكون 6 أحرف على الأقل'; render(); return; }
   if (!isAllowedEmail(email)) { state.authError = `التسجيل متاح فقط للبريد الإلكتروني الرسمي ضمن نطاق @${ALLOWED_DOMAIN}`; render(); return; }
-  if (!branch) { state.authError = 'الرجاء اختيار الفرع'; render(); return; }
 
   state.authBusy = true; state.authError = ''; render();
   const { data, error } = await sb.auth.signUp({
     email, password,
-    options: { data: { full_name: name, category, branch } }
+    options: { data: { full_name: name } }
   });
   state.authBusy = false;
   if (error) {
@@ -746,24 +752,7 @@ function screenLogin(){
       <div class="field"><label>كلمة المرور</label><input id="auth-password" type="password" placeholder="••••••••" /></div>
       ${state.authMode==='signin' ? `<div style="text-align:left;margin:-8px 0 12px;"><span style="font-size:12px;color:var(--brand-600);font-weight:700;cursor:pointer;" onclick="goForgotPassword()">نسيت كلمة المرور؟</span></div>` : ''}
 
-      ${state.authMode==='signup' ? `
-      <div class="field">
-        <label>نوع الحساب</label>
-        <div class="tabs" style="margin-top:0;">
-          <button type="button" class="tab ${state.authCategory==='trainee'?'active':''}" onclick="setAuthCategory('trainee')">متدرب</button>
-          <button type="button" class="tab ${state.authCategory==='staff'?'active':''}" onclick="setAuthCategory('staff')">طاقم أكاديمي / إداري</button>
-          <button type="button" class="tab ${state.authCategory==='trainer'?'active':''}" onclick="setAuthCategory('trainer')">مدرب رياضي</button>
-        </div>
-        <div class="sidebar-note" style="margin-top:4px;">${state.authCategory==='trainer' ? 'حساب المدرب الرياضي له شاشاته الخاصة (الجدول، المتدربون، التقييمات)' : 'المتدرب والطاقم الأكاديمي/الإداري يستفيدان من نفس خدمات الصالة (حجز، قياسات، برامج) — هذا التصنيف للتنظيم الإداري فقط'}</div>
-      </div>
-      <div class="field">
-        <label>الفرع</label>
-        <div class="tabs" style="margin-top:0;">
-          ${BRANCHES.map(b=>`<button type="button" class="tab ${state.authBranch===b?'active':''}" onclick="setAuthBranch('${b}')">${b}</button>`).join('')}
-        </div>
-        <div class="sidebar-note" style="margin-top:4px;">يُحدَّد الفرع مرة واحدة عند التسجيل. لتغييره لاحقاً يلزم رفع تذكرة دعم فني لتقوم الإدارة بتغييره.</div>
-      </div>
-      ` : ''}
+      ${state.authMode==='signup' ? `<div class="sidebar-note" style="margin-top:-4px;">بعد إنشاء الحساب وتسجيل الدخول، سنطلب منك اختيار نوع حسابك وفرعك لإكمال ملفك الشخصي.</div>` : ''}
 
       ${state.authError ? `<div style="background:#fdecec;color:var(--danger);border-radius:12px;padding:10px 12px;font-size:12px;margin-bottom:12px;">${state.authError}</div>` : ''}
 
@@ -786,16 +775,27 @@ function screenLogin(){
 // إكمال البيانات بعد أول تسجيل دخول (للمتدربين فقط: العمر، الوزن، الدبلوم)
 // =========================================================
 async function submitCompleteProfile(){
-  const age = document.getElementById('cp-age').value.trim();
-  const weight = document.getElementById('cp-weight').value.trim();
-  const diploma = document.getElementById('cp-diploma').value.trim();
+  if (state.cpNeedsCategory && !state.cpBranch) { toast('الرجاء اختيار الفرع'); return; }
+
+  const update = {};
+  if (state.cpNeedsCategory) {
+    update.category = state.cpCategory;
+    update.branch = state.cpBranch;
+  }
+  if (state.cpCategory === 'trainee') {
+    const ageEl = document.getElementById('cp-age');
+    const weightEl = document.getElementById('cp-weight');
+    const diplomaEl = document.getElementById('cp-diploma');
+    const age = ageEl ? ageEl.value.trim() : '';
+    const weight = weightEl ? weightEl.value.trim() : '';
+    const diploma = diplomaEl ? diplomaEl.value.trim() : '';
+    update.age = age ? Number(age) : null;
+    update.weight = weight ? Number(weight) : null;
+    update.diploma = diploma || null;
+  }
 
   state.authResetBusy = true; render();
-  const { data, error } = await sb.from('profiles').update({
-    age: age ? Number(age) : null,
-    weight: weight ? Number(weight) : null,
-    diploma: diploma || null,
-  }).eq('id', state.authUser.id).select().single();
+  const { data, error } = await sb.from('profiles').update(update).eq('id', state.authUser.id).select().single();
   state.authResetBusy = false;
 
   if (error) { toast('حدث خطأ أثناء الحفظ: ' + error.message); render(); return; }
@@ -810,20 +810,40 @@ function skipCompleteProfile(){
 window.skipCompleteProfile = skipCompleteProfile;
 
 function screenCompleteProfile(){
+  const showTraineeFields = state.cpCategory === 'trainee';
   return `<div class="view no-pad" style="display:flex;flex-direction:column;min-height:100%;">
     <div style="background:var(--brand-900);padding:36px 24px 28px;color:#fff;border-radius:0 0 32px 32px;text-align:center;">
       <img src="${typeof LOGO_DATA_URI!=='undefined'?LOGO_DATA_URI:''}" alt="AOL GYM" style="height:40px;width:auto;display:block;margin:0 auto 12px;" />
-      <h1 style="margin:0;font-size:18px;">آخر خطوة قبل البدء</h1>
-      <p style="margin:6px 0 0;font-size:12.5px;opacity:.85;">أكملي بياناتك الصحية والدراسية لتخصيص برنامجك بشكل أفضل</p>
+      <h1 style="margin:0;font-size:18px;">${state.cpNeedsCategory ? 'أكملي حسابك' : 'آخر خطوة قبل البدء'}</h1>
+      <p style="margin:6px 0 0;font-size:12.5px;opacity:.85;">${state.cpNeedsCategory ? 'اختاري نوع حسابك وفرعك للمتابعة' : 'أكملي بياناتك الصحية والدراسية لتخصيص برنامجك بشكل أفضل'}</p>
     </div>
     <div style="padding:22px 20px;flex:1;">
+      ${state.cpNeedsCategory ? `
+      <div class="field">
+        <label>نوع الحساب</label>
+        <div class="tabs" style="margin-top:0;">
+          <button type="button" class="tab ${state.cpCategory==='trainee'?'active':''}" onclick="setCpCategory('trainee')">متدرب</button>
+          <button type="button" class="tab ${state.cpCategory==='staff'?'active':''}" onclick="setCpCategory('staff')">طاقم أكاديمي / إداري</button>
+        </div>
+        <div class="sidebar-note" style="margin-top:4px;">المتدرب والطاقم الأكاديمي/الإداري يستفيدان من نفس خدمات الصالة (حجز، قياسات، برامج) — هذا التصنيف للتنظيم الإداري فقط</div>
+      </div>
+      <div class="field">
+        <label>الفرع</label>
+        <div class="tabs" style="margin-top:0;">
+          ${BRANCHES.map(b=>`<button type="button" class="tab ${state.cpBranch===b?'active':''}" onclick="setCpBranch('${b}')">${b}</button>`).join('')}
+        </div>
+        <div class="sidebar-note" style="margin-top:4px;">يُحدَّد الفرع مرة واحدة. لتغييره لاحقاً يلزم رفع تذكرة دعم فني لتقوم الإدارة بتغييره.</div>
+      </div>
+      ` : ''}
+      ${showTraineeFields ? `
       <div style="display:flex;gap:10px;">
         <div class="field" style="flex:1;"><label>العمر</label><input id="cp-age" type="number" min="1" max="120" placeholder="مثال: 27" /></div>
         <div class="field" style="flex:1;"><label>الوزن (كجم)</label><input id="cp-weight" type="number" min="1" max="400" step="0.1" placeholder="مثال: 70" /></div>
       </div>
       <div class="field"><label>الدبلوم / التخصص الدراسي</label><input id="cp-diploma" placeholder="مثال: دبلوم إدارة الأعمال" /></div>
+      ` : ''}
       <button class="btn btn-primary" ${state.authResetBusy?'disabled':''} onclick="submitCompleteProfile()">${state.authResetBusy?'جاري الحفظ...':'متابعة'}</button>
-      <button class="btn btn-outline" style="margin-top:8px;" onclick="skipCompleteProfile()">تخطي الآن</button>
+      ${state.cpNeedsCategory ? '' : `<button class="btn btn-outline" style="margin-top:8px;" onclick="skipCompleteProfile()">تخطي الآن</button>`}
     </div>
   </div>`;
 }
