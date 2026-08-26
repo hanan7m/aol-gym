@@ -9,7 +9,10 @@ const state = {
   role: null,           // 'client' | 'trainer' | 'admin'
   route: 'login',
   params: {},
-  ticketDraft: { category: 'فني', subject: '', message: '' },
+  ticketDraft: { category: 'الحجوزات والمواعيد', subject: '', message: '' },
+  explorerSection: 'all',
+  explorerDataset: 'all',
+  explorerSearch: '',
   toastTimer: null,
   deferredInstallPrompt: null,   // حدث تثبيت PWA (Android/Chrome/Edge) بانتظار الاستخدام
   installBannerDismissed: false,
@@ -18,6 +21,356 @@ const state = {
 };
 
 const $app = document.getElementById('app');
+
+const SUPPORT_CATEGORIES = [
+  { label: 'الحجوزات والمواعيد', hint: 'كلاس، جلسة خاصة، أو موعد قياس' },
+  { label: 'العضوية والخدمات', hint: 'العضوية، الفرع، أو خدمات الصالة' },
+  { label: 'التطبيق والحساب', hint: 'تسجيل الدخول أو مشكلة تقنية' },
+  { label: 'القياسات والبرامج', hint: 'InBody أو برنامج تدريبي وغذائي' },
+  { label: 'شكوى أو ملاحظة', hint: 'ملاحظة تحتاج إلى متابعة الإدارة' },
+  { label: 'اقتراح', hint: 'فكرة لتحسين التجربة' },
+];
+
+const LEGACY_TICKET_CATEGORIES = {
+  'فني': 'التطبيق والحساب',
+  'إداري': 'العضوية والخدمات',
+  'ملاحظات': 'شكوى أو ملاحظة',
+  'اقتراحات': 'اقتراح',
+};
+
+function normalizeTicketCategory(category){
+  return LEGACY_TICKET_CATEGORIES[category] || category || 'شكوى أو ملاحظة';
+}
+
+const EXPLORER_SECTIONS = [
+  { key: 'all', label: 'الكل' },
+  { key: 'profile', label: 'الملف الصحي' },
+  { key: 'booking', label: 'الحجوزات' },
+  { key: 'membership', label: 'العضوية' },
+  { key: 'operations', label: 'التشغيل' },
+  { key: 'attendance', label: 'الحضور' },
+  { key: 'support', label: 'الدعم' },
+  { key: 'permissions', label: 'الصلاحيات' },
+];
+
+const EXPLORER_FIELD_LABELS = {
+  accountKey: 'نوع الحساب',
+  access: 'مستوى الوصول',
+  audience: 'الفئة المستهدفة',
+  avg: 'متوسط التقييم',
+  body: 'المحتوى',
+  booked: 'الحجوزات الحالية',
+  branch: 'الفرع',
+  capacity: 'السعة',
+  category: 'التصنيف',
+  completedSessions: 'الجلسات المكتملة',
+  count: 'عدد التقييمات',
+  date: 'التاريخ',
+  day: 'اليوم',
+  duration: 'المدة',
+  email: 'البريد الإلكتروني',
+  fat: 'نسبة الدهون',
+  features: 'المزايا',
+  fullName: 'الاسم',
+  id: 'المعرف',
+  index: 'الترتيب',
+  initials: 'الأحرف الأولى',
+  joined: 'تاريخ الانضمام',
+  location: 'الموقع',
+  membership: 'العضوية',
+  method: 'الطريقة',
+  muscle: 'الكتلة العضلية',
+  name: 'الاسم',
+  nationalId: 'رقم الهوية',
+  newMembers: 'أعضاء جدد',
+  note: 'ملاحظة',
+  notes: 'التفاصيل',
+  perks: 'المزايا',
+  perms: 'الصلاحيات',
+  phone: 'الهاتف',
+  qr: 'رمز QR',
+  reach: 'الوصول',
+  read: 'مقروء',
+  recordDate: 'تاريخ السجل',
+  reply: 'الرد',
+  role: 'الدور',
+  sent: 'تاريخ الإرسال',
+  specialty: 'التخصص',
+  status: 'الحالة',
+  subject: 'الموضوع',
+  time: 'الوقت',
+  title: 'العنوان',
+  track: 'المسار',
+  trainer: 'المدربة',
+  type: 'النوع',
+  value: 'القيمة',
+  visits: 'الزيارات',
+  weight: 'الوزن',
+};
+
+const EXPLORER_DATASETS = [
+  {
+    key: 'users',
+    section: 'profile',
+    label: 'الحسابات',
+    description: 'الملفات الأساسية للأدوار المختلفة داخل التطبيق',
+    getItems: () => Object.entries(DB.users || {}).map(([accountKey, user]) => ({ accountKey, ...user })),
+  },
+  {
+    key: 'inbody',
+    section: 'profile',
+    label: 'قياسات InBody',
+    description: 'سجل القياسات الصحية وتطور الحالة البدنية',
+    getItems: () => DB.inbody || [],
+  },
+  {
+    key: 'programs',
+    section: 'profile',
+    label: 'البرامج',
+    description: 'البرامج التدريبية والغذائية المخصصة',
+    getItems: () => DB.programs || [],
+  },
+  {
+    key: 'trainerNotes',
+    section: 'profile',
+    label: 'ملاحظات المدربات',
+    description: 'التوصيات والمتابعات اليومية',
+    getItems: () => DB.trainerNotes || [],
+  },
+  {
+    key: 'classes',
+    section: 'booking',
+    label: 'الكلاسات',
+    description: 'الجدول الأسبوعي للكلاسات الجماعية',
+    getItems: () => DB.classes || [],
+  },
+  {
+    key: 'privateSlots',
+    section: 'booking',
+    label: 'المواعيد الخاصة',
+    description: 'المواعيد المتاحة للجلسات الخاصة والقياسات',
+    getItems: () => DB.privateSlots || [],
+  },
+  {
+    key: 'bookings',
+    section: 'booking',
+    label: 'الحجوزات',
+    description: 'سجل الحجوزات المؤكدة والمنتهية والملغاة',
+    getItems: () => DB.bookings || [],
+  },
+  {
+    key: 'notifications',
+    section: 'booking',
+    label: 'الإشعارات',
+    description: 'الإشعارات المرتبطة بالحجز والدعم والعروض',
+    getItems: () => DB.notifications || [],
+  },
+  {
+    key: 'tracks',
+    section: 'membership',
+    label: 'المسارات',
+    description: 'المسارات التدريبية والمزايا المتاحة',
+    getItems: () => DB.tracks || [],
+  },
+  {
+    key: 'offers',
+    section: 'operations',
+    label: 'العروض',
+    description: 'الحملات والعروض المرسلة للأعضاء',
+    getItems: () => DB.offers || [],
+  },
+  {
+    key: 'trainerRatings',
+    section: 'operations',
+    label: 'تقييمات المدربات',
+    description: 'متوسطات تقييم الأداء لكل مدربة',
+    getItems: () => DB.trainerRatings || [],
+  },
+  {
+    key: 'weeklyStats',
+    section: 'operations',
+    label: 'الإحصاءات الأسبوعية',
+    description: 'مؤشرات التشغيل الرئيسية لهذا الأسبوع',
+    getItems: () => [DB.weeklyStats || {}],
+  },
+  {
+    key: 'attendanceTrend',
+    section: 'operations',
+    label: 'اتجاه الحضور',
+    description: 'نقاط الاتجاه الأسبوعي للحضور',
+    getItems: () => (DB.attendanceTrend || []).map((value, index) => ({ index: index + 1, day: (DB.weekDays || [])[index] || `يوم ${index + 1}`, value })),
+  },
+  {
+    key: 'serviceUsage',
+    section: 'operations',
+    label: 'استخدام الخدمات',
+    description: 'توزيع استخدام الخدمات داخل الصالة',
+    getItems: () => DB.serviceUsage || [],
+  },
+  {
+    key: 'attendanceLog',
+    section: 'attendance',
+    label: 'سجل الحضور',
+    description: 'آخر عمليات الدخول والخروج',
+    getItems: () => DB.attendanceLog || [],
+  },
+  {
+    key: 'tickets',
+    section: 'support',
+    label: 'تذاكر الدعم',
+    description: 'طلبات الدعم الفني والشكاوى والاقتراحات',
+    getItems: () => DB.tickets || [],
+  },
+  {
+    key: 'roles',
+    section: 'permissions',
+    label: 'الأدوار',
+    description: 'الأدوار وصلاحيات الوصول الممنوحة لها',
+    getItems: () => DB.roles || [],
+  },
+  {
+    key: 'staff',
+    section: 'permissions',
+    label: 'الفريق',
+    description: 'أعضاء الفريق ومستوى الوصول لكل منهم',
+    getItems: () => DB.staff || [],
+  },
+];
+
+function explorerSectionLabel(sectionKey){
+  const section = EXPLORER_SECTIONS.find((item) => item.key === sectionKey);
+  return section ? section.label : sectionKey;
+}
+
+function explorerFieldLabel(fieldKey){
+  return EXPLORER_FIELD_LABELS[fieldKey] || fieldKey;
+}
+
+function explorerSerialize(value){
+  if (Array.isArray(value)) return value.map(explorerSerialize).join(' ');
+  if (value && typeof value === 'object') return Object.values(value).map(explorerSerialize).join(' ');
+  return String(value == null ? '' : value);
+}
+
+function explorerPreviewValue(value){
+  let text = '';
+  if (Array.isArray(value) && value.every((item) => item == null || typeof item !== 'object')) {
+    text = value.join('، ');
+  } else if (typeof value === 'boolean') {
+    text = value ? 'نعم' : 'لا';
+  } else {
+    text = explorerSerialize(value);
+  }
+  const normalized = String(text || '—').trim();
+  return normalized.length > 64 ? normalized.slice(0, 61) + '…' : normalized;
+}
+
+function explorerRecordTitle(def, raw, index){
+  return [
+    raw.title,
+    raw.name,
+    raw.subject,
+    raw.role,
+    raw.trainer,
+    raw.audience,
+    raw.category,
+  ].find((value) => String(value || '').trim()) || `${def.label} ${index + 1}`;
+}
+
+function buildExplorerRecord(def, item, index){
+  const raw = item && typeof item === 'object' && !Array.isArray(item) ? item : { value: item };
+  const title = explorerRecordTitle(def, raw, index);
+  const subtitle = [
+    raw.date,
+    raw.time,
+    raw.status,
+    raw.type,
+    raw.day,
+    raw.branch,
+    raw.trainer,
+  ].filter(Boolean).slice(0, 4).join(' · ');
+  const badges = [
+    raw.status,
+    raw.type,
+    raw.role,
+    raw.day,
+  ].filter(Boolean).slice(0, 3);
+  const preview = Object.entries(raw)
+    .filter(([key, value]) => !['id', 'title', 'name', 'subject'].includes(key) && value != null && String(value).trim() !== '')
+    .slice(0, 3)
+    .map(([key, value]) => ({ label: explorerFieldLabel(key), value: explorerPreviewValue(value) }));
+
+  return {
+    id: raw.id || `${def.key}-${index + 1}`,
+    index,
+    datasetKey: def.key,
+    datasetLabel: def.label,
+    sectionKey: def.section,
+    sectionLabel: explorerSectionLabel(def.section),
+    title,
+    subtitle,
+    badges,
+    preview,
+    raw,
+    searchBlob: `${def.label} ${def.description} ${explorerSerialize(raw)}`.toLowerCase(),
+  };
+}
+
+function getExplorerCatalog(){
+  return EXPLORER_DATASETS.map((def) => {
+    const items = (def.getItems() || []).map((item, index) => buildExplorerRecord(def, item, index));
+    return { ...def, sectionLabel: explorerSectionLabel(def.section), items, count: items.length };
+  }).filter((dataset) => dataset.count);
+}
+
+function getExplorerBackRoute(){
+  return (state.params && state.params.backRoute) || (state.role === 'admin' ? 'admin-dashboard' : 'login');
+}
+
+function getExplorerView(){
+  const catalog = getExplorerCatalog();
+  const section = state.explorerSection || 'all';
+  const dataset = state.explorerDataset || 'all';
+  const scopedCatalog = section === 'all' ? catalog : catalog.filter((item) => item.section === section);
+  const activeCatalog = dataset === 'all' ? scopedCatalog : scopedCatalog.filter((item) => item.key === dataset);
+  const search = (state.explorerSearch || '').trim().toLowerCase();
+  const records = activeCatalog.flatMap((item) => item.items).filter((record) => !search || record.searchBlob.includes(search));
+
+  return { catalog, scopedCatalog, activeCatalog, records, section, dataset, search };
+}
+
+function openDataExplorer(backRoute){
+  go('data-explorer', { backRoute: backRoute || getExplorerBackRoute() });
+}
+window.openDataExplorer = openDataExplorer;
+
+function setExplorerSection(section){
+  state.explorerSection = section;
+  const stillVisible = getExplorerCatalog().some((dataset) => (section === 'all' || dataset.section === section) && dataset.key === state.explorerDataset);
+  if (!stillVisible) state.explorerDataset = 'all';
+  render();
+}
+window.setExplorerSection = setExplorerSection;
+
+function setExplorerDataset(dataset){
+  state.explorerDataset = dataset;
+  render();
+}
+window.setExplorerDataset = setExplorerDataset;
+
+function setExplorerSearch(search){
+  state.explorerSearch = search;
+  render();
+}
+window.setExplorerSearch = setExplorerSearch;
+
+function clearExplorerFilters(){
+  state.explorerSection = 'all';
+  state.explorerDataset = 'all';
+  state.explorerSearch = '';
+  render();
+}
+window.clearExplorerFilters = clearExplorerFilters;
 
 // ---------------------------------------------------------
 // تثبيت التطبيق (PWA) — التقاط حدث المتصفح وعرض زر تثبيت مخصص
@@ -227,12 +580,22 @@ function mapOffer(r){ return { id:r.id, title:r.title, audience:r.audience, stat
 function mapBooking(r){ return { id:r.id, classId:r.class_id, slotId:r.slot_id, title:r.title, date:r.booking_date, time:r.booking_time, trainer:r.trainer_name, status:r.status }; }
 function mapInbody(r){ return { id:r.id, date:r.record_date, weight:r.weight, muscle:r.muscle, fat:r.fat }; }
 function mapProgram(r){ return { id:r.id, type:r.type, title:r.title, trainer:r.trainer_name, date:r.program_date, notes:r.notes }; }
-function mapTicket(r){ return { id:r.id, category:r.category, subject:r.subject, status:r.status, date:(r.created_at||'').slice(0,10), reply:r.reply, userId:r.user_id }; }
+function mapTicket(r){ return { id:r.id, category:normalizeTicketCategory(r.category), subject:r.subject, status:r.status, date:(r.created_at||'').slice(0,10), reply:r.reply, userId:r.user_id }; }
 function mapNotif(r){ return { id:r.id, title:r.title, body:r.body, type:r.type, read:r.read, time:relTimeAr(r.created_at) }; }
 function mapStaff(r){ return { id:r.id, name:r.name, role:r.role, access:r.access }; }
 function mapRole(r){ return { id:r.id, role:r.role, perms:r.perms||[] }; }
 function mapTrainerRating(r){ return { id:r.id, trainer:r.trainer, avg:r.avg, count:r.count }; }
 function mapAttendance(r){ return { id:r.id, name:r.member_name, type:r.type, method:r.method, time:arTime(r.occurred_at) }; }
+
+// All text from Supabase must be encoded before it is placed in an HTML template.
+function escapeHtml(value){
+  return String(value == null ? '' : value)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
 
 function arTime(iso){
   if (!iso) return '';
@@ -253,22 +616,29 @@ function relTimeAr(iso){
   return `قبل ${days} أيام`;
 }
 
-// يحمّل الكتالوج المشترك (كلاسات/مواعيد خاصة/عروض/تذاكر) وبيانات المستخدم الخاصة (حجوزاته، قياساته، برامجه، إشعاراته)
+// يحمّل الكتالوج المشترك وبيانات المستخدم الخاصة؛ تذاكر الدعم مرئية لصاحبها أو للإدارة فقط.
 async function loadLiveData(){
   if (typeof sb === 'undefined' || !state.authUser) return;
   const uid = state.authUser.id;
-  const isAdminUser = state.authProfile && state.authProfile.role === 'admin';
+  const role = (state.authProfile && state.authProfile.role) || 'client';
+  const isAdminUser = role === 'admin';
+  const ticketsQuery = isAdminUser
+    ? sb.from('tickets').select('*').order('created_at', { ascending: false })
+    : role === 'client'
+      ? sb.from('tickets').select('*').eq('user_id', uid).order('created_at', { ascending: false })
+      : Promise.resolve({ data: [], error: null });
 
-  const [classesRes, slotsRes, offersRes, ticketsRes, bookingsRes, inbodyRes, programsRes, notifRes, ratingsRes] = await Promise.all([
+  const [classesRes, slotsRes, offersRes, ticketsRes, bookingsRes, inbodyRes, programsRes, notifRes, ratingsRes, attendanceRes] = await Promise.all([
     sb.from('classes').select('*').order('day'),
     sb.from('private_slots').select('*').order('created_at'),
     sb.from('offers').select('*').order('created_at', { ascending: false }),
-    sb.from('tickets').select('*').order('created_at', { ascending: false }),
+    ticketsQuery,
     isAdminUser ? Promise.resolve({ data: [], error: null }) : sb.from('bookings').select('*').eq('user_id', uid).order('created_at', { ascending: false }),
     isAdminUser ? Promise.resolve({ data: [], error: null }) : sb.from('inbody_records').select('*').eq('user_id', uid).order('record_date'),
     isAdminUser ? Promise.resolve({ data: [], error: null }) : sb.from('programs').select('*').eq('user_id', uid).order('program_date', { ascending: false }),
     isAdminUser ? Promise.resolve({ data: [], error: null }) : sb.from('notifications').select('*').eq('user_id', uid).order('created_at', { ascending: false }),
-    sb.from('trainer_ratings').select('*').order('avg', { ascending: false }),
+    sb.from('trainer_ratings_live').select('*').order('avg', { ascending: false }),
+    role === 'client' ? sb.from('attendance_log').select('*').eq('user_id', uid).order('occurred_at', { ascending: false }).limit(10) : Promise.resolve({ data: [], error: null }),
   ]);
 
   if (!classesRes.error && classesRes.data) DB.classes = classesRes.data.map(mapClass);
@@ -281,6 +651,7 @@ async function loadLiveData(){
     if (!inbodyRes.error && inbodyRes.data) DB.inbody = inbodyRes.data.map(mapInbody);
     if (!programsRes.error && programsRes.data) DB.programs = programsRes.data.map(mapProgram);
     if (!notifRes.error && notifRes.data) DB.notifications = notifRes.data.map(mapNotif);
+    if (!attendanceRes.error && attendanceRes.data) DB.clientAttendance = attendanceRes.data.map(mapAttendance);
   }
   if (isAdminUser) {
     await loadAdminData();
@@ -290,11 +661,23 @@ async function loadLiveData(){
   }
 }
 
-// يحمّل قائمة المتدربين الحقيقيين وطلبات قياس InBody المعلّقة لشاشات المدرب
+// يحمّل فقط المتدربين المسندين إلى المدرب الحالي، وليس جميع حسابات العملاء.
 async function loadTrainerData(){
+  const { data: assignments, error: assignmentsError } = await sb
+    .from('trainer_client_assignments')
+    .select('client_id')
+    .eq('trainer_id', state.authUser.id);
+
+  const clientIds = !assignmentsError && assignments ? assignments.map(a => a.client_id) : [];
+  if (!clientIds.length) {
+    DB.realClients = [];
+    DB.inbodyRequests = [];
+    return;
+  }
+
   const [clientsRes, requestsRes] = await Promise.all([
-    sb.from('profiles').select('id, full_name, phone, branch').eq('role', 'client').order('full_name'),
-    sb.from('inbody_requests').select('*').eq('status', 'pending').order('created_at'),
+    sb.from('profiles').select('id, full_name, phone, branch').in('id', clientIds).order('full_name'),
+    sb.from('inbody_requests').select('*').in('user_id', clientIds).eq('status', 'pending').order('created_at'),
   ]);
   DB.realClients = (!clientsRes.error && clientsRes.data) ? clientsRes.data : [];
 
@@ -358,7 +741,7 @@ window.realSignIn = realSignIn;
 const DEMO_ACCOUNTS = [
   { label: 'دخول كمتدرب (تجريبي)', email: 'demo.trainee@aol.edu.sa', password: 'Demo@12345' },
   { label: 'دخول كطاقم أكاديمي (تجريبي)', email: 'demo.staff@aol.edu.sa', password: 'Demo@12345' },
-  { label: 'دخول كمدرب رياضي (تجريبي)', email: 'demo.trainer@aol.edu.sa', password: 'Demo@12345' },
+  { label: 'دخول كمدربة رياضية (تجريبي)', email: 'demo.trainer@aol.edu.sa', password: 'Demo@12345' },
   { label: 'دخول كإدارة (تجريبي)', email: 'demo.admin@aol.edu.sa', password: 'Demo@12345' },
 ];
 async function quickLogin(email, password){
@@ -512,16 +895,13 @@ async function bookPrivateSlot(slotId){
   if(!s || s.isBooked) return;
   state.bookingBusy = true; render();
   try {
-    const { error: insErr } = await sb.from('bookings').insert({
-      user_id: state.authUser.id, slot_id: s.id, title: s.type,
-      booking_date: s.date, booking_time: s.time, trainer_name: s.trainer, status: 'مؤكد'
-    });
-    if (insErr) {
-      if (insErr.code !== '23505') toast('حدث خطأ: ' + insErr.message);
+    // The RPC locks the slot and creates its booking in one database transaction.
+    const { error } = await sb.rpc('book_private_slot', { p_slot_id: s.id });
+    if (error) {
+      const unavailable = error.message && error.message.includes('لم يعد متاحاً');
+      toast(unavailable ? 'هذا الموعد حُجز للتو، اختاري موعداً آخر' : 'حدث خطأ: ' + error.message);
       return;
     }
-    const { error: updErr } = await sb.from('private_slots').update({ is_booked: true }).eq('id', s.id);
-    if (updErr) { toast('حدث خطأ: ' + updErr.message); return; }
     toast('تم تأكيد حجز الموعد الخاص');
   } catch (e) {
     toast('تعذّر الاتصال، حاولي مرة أخرى');
@@ -533,13 +913,20 @@ async function bookPrivateSlot(slotId){
 }
 window.bookPrivateSlot = bookPrivateSlot;
 
-function joinTrack(trackId){
+async function joinTrack(trackId){
   const t = DB.tracks.find(x=>x.id===trackId);
-  toast('تم إرسال طلب الانضمام لـ «' + (t?t.name:'المسار') + '» للمشرف الأكاديمي');
+  if (!t || !state.authUser || state.authProfile?.role !== 'client') return;
+  const { error } = await sb.rpc('request_track_change', { p_track_name: t.name });
+  if (error) { toast('حدث خطأ: ' + error.message); return; }
+  toast('تم إرسال طلب التحويل إلى «' + t.name + '» للإدارة');
 }
 window.joinTrack = joinTrack;
 
 async function submitTicket(){
+  if (!state.authProfile || state.authProfile.role !== 'client') {
+    toast('فتح طلبات الدعم متاح لحسابات العميلات فقط');
+    return;
+  }
   const subj = document.getElementById('tk-subject').value.trim();
   const msg = document.getElementById('tk-message').value.trim();
   if(!subj || !msg){ toast('الرجاء تعبئة كل الحقول'); return; }
@@ -548,7 +935,7 @@ async function submitTicket(){
   });
   if (error) { toast('حدث خطأ: ' + error.message); return; }
   toast('تم إرسال طلبك للدعم الفني');
-  state.ticketDraft = { category: 'فني', subject: '', message: '' };
+  state.ticketDraft = { category: 'الحجوزات والمواعيد', subject: '', message: '' };
   await loadLiveData();
   go('client-support');
 }
@@ -564,7 +951,7 @@ function requestBranchChange(){
   const current = (state.authProfile && state.authProfile.branch) || '';
   const other = BRANCHES.find(b=>b!==current) || BRANCHES[0];
   state.ticketDraft = {
-    category: 'إداري',
+    category: 'العضوية والخدمات',
     subject: 'طلب تغيير الفرع',
     message: `أرغب بتغيير فرعي الحالي (${current}) إلى (${other}).`
   };
@@ -582,16 +969,59 @@ async function markAllRead(){
 }
 window.markAllRead = markAllRead;
 
-function rateSession(stars){
-  toast('شكراً لتقييمك! (' + stars + ' نجوم)');
+function openRatingSheet(bookingId){
+  const booking = DB.bookings.find(item => item.id === bookingId);
+  const trainerName = booking ? booking.trainer : '';
+  openSheet(`<h3>تقييم الجلسة</h3><div class="muted">كيف كانت جلستك مع ${escapeHtml(trainerName || 'المدربة')}؟</div><div class="rating" style="margin:20px 0;">${[1,2,3,4,5].map(star=>`<button class="icon-btn" style="width:42px;height:42px;" onclick="rateSession('${bookingId}',${star})">${icon('star')}</button>`).join('')}</div>`);
+}
+window.openRatingSheet = openRatingSheet;
+
+async function rateSession(bookingId, stars){
+  const { error } = await sb.rpc('submit_session_rating', { p_booking_id: bookingId, p_stars: stars });
+  if (error) { toast('حدث خطأ: ' + error.message); return; }
+  toast('شكراً لتقييمك!');
   closeSheet();
+  await loadLiveData();
+  render();
 }
 window.rateSession = rateSession;
 
-function simulateScan(){
-  toast('تم تسجيل الدخول بنجاح عبر QR ✔ الساعة ' + new Date().toLocaleTimeString('ar-SA',{hour:'2-digit',minute:'2-digit'}));
+async function recordMyAttendance(){
+  if (!state.authUser || state.authProfile?.role !== 'client') return;
+  const { data, error } = await sb.rpc('record_my_attendance');
+  if (error) { toast('حدث خطأ: ' + error.message); return; }
+  toast((data && data.action) === 'خروج' ? 'تم تسجيل الخروج بنجاح' : 'تم تسجيل الدخول بنجاح');
+  await loadLiveData();
+  render();
 }
-window.simulateScan = simulateScan;
+window.recordMyAttendance = recordMyAttendance;
+
+function downloadReport(content, type, filename){
+  const link = document.createElement('a');
+  link.href = URL.createObjectURL(new Blob([content], { type }));
+  link.download = filename;
+  link.click();
+  URL.revokeObjectURL(link.href);
+}
+
+function exportReportCsv(){
+  if (state.authProfile?.role !== 'admin') return;
+  const rows = [['المؤشر', 'القيمة'], ['معدل الحضور الأسبوعي', `${DB.weeklyStats.attendanceRate}%`], ['إجمالي الحجوزات', DB.weeklyStats.bookings], ['زيارات الأسبوع', DB.weeklyStats.visits], ...DB.serviceUsage.map(item => [item.name, `${item.value}%`])];
+  const csv = '\uFEFF' + rows.map(row => row.map(value => `"${String(value).replace(/"/g, '""')}"`).join(',')).join('\n');
+  downloadReport(csv, 'text/csv;charset=utf-8', 'aol-gym-report.csv');
+}
+window.exportReportCsv = exportReportCsv;
+
+function printReport(){
+  if (state.authProfile?.role !== 'admin') return;
+  const report = window.open('', '_blank');
+  if (!report) { toast('يرجى السماح بالنوافذ المنبثقة لتصدير PDF'); return; }
+  report.document.write(`<html dir="rtl"><head><title>تقرير AOL GYM</title><style>body{font-family:Tahoma,sans-serif;padding:32px;color:#18253a}table{width:100%;border-collapse:collapse}th,td{padding:10px;border:1px solid #ddd;text-align:right}</style></head><body><h1>تقرير AOL GYM</h1><p>تاريخ التصدير: ${new Date().toLocaleDateString('ar-SA')}</p><table><tr><th>المؤشر</th><th>القيمة</th></tr><tr><td>معدل الحضور الأسبوعي</td><td>${DB.weeklyStats.attendanceRate}%</td></tr><tr><td>إجمالي الحجوزات</td><td>${DB.weeklyStats.bookings}</td></tr><tr><td>زيارات الأسبوع</td><td>${DB.weeklyStats.visits}</td></tr></table></body></html>`);
+  report.document.close();
+  report.focus();
+  report.print();
+}
+window.printReport = printReport;
 
 async function addOffer(){
   const title = document.getElementById('offer-title').value.trim();
@@ -664,10 +1094,12 @@ window.deleteClass = deleteClass;
 function suggestTicketReply(t){
   const subj = (t.subject || '').trim();
   const byCategory = {
-    'فني': `مرحباً، شكراً لإبلاغنا بخصوص "${subj}". قام فريقنا التقني بمراجعة المشكلة وسنعمل على حلها في أقرب وقت، وسنوافيك بأي تحديث.`,
-    'إداري': `مرحباً، تم استلام طلبك الإداري بخصوص "${subj}" وسيتم التواصل معك ومتابعته من قبل الإدارة قريباً.`,
-    'ملاحظات': `مرحباً، نشكرك على ملاحظتك بخصوص "${subj}"، تم توثيقها ورفعها للفريق المختص للاطلاع عليها.`,
-    'اقتراحات': `مرحباً، شكراً لاقتراحك بخصوص "${subj}"! تم رفعه لفريق التطوير وسيتم دراسته ضمن التحديثات القادمة.`,
+    'الحجوزات والمواعيد': `مرحباً، تم استلام طلبك بخصوص "${subj}" وسيتم التحقق من الموعد أو الحجز والتواصل معك قريباً.`,
+    'العضوية والخدمات': `مرحباً، تم استلام طلبك بخصوص "${subj}" وستتابعه الإدارة معك قريباً.`,
+    'التطبيق والحساب': `مرحباً، شكراً لإبلاغنا بخصوص "${subj}". سيقوم الفريق التقني بمراجعة المشكلة وإبلاغك بأي تحديث.`,
+    'القياسات والبرامج': `مرحباً، تم استلام طلبك بخصوص "${subj}" وستتواصل معك المدربة لتنسيق الخطوة التالية.`,
+    'شكوى أو ملاحظة': `مرحباً، نشكرك على ملاحظتك بخصوص "${subj}". تم توثيقها ورفعها للإدارة المختصة.`,
+    'اقتراح': `مرحباً، شكراً لاقتراحك بخصوص "${subj}"! تم رفعه للفريق المختص لدراسته ضمن التحسينات القادمة.`,
   };
   return byCategory[t.category] || `مرحباً، شكراً لتواصلك بخصوص "${subj}"، سنعمل على متابعة الأمر والرد عليك في أقرب وقت.`;
 }
@@ -677,14 +1109,18 @@ function openReplyTicketSheet(id){
   if (!t) return;
   openSheet(`
     <h3>الرد على التذكرة</h3>
-    <div class="muted">${t.subject} · ${t.category}</div>
-    <div class="field"><label>نص الرد</label><textarea id="tk-reply-text">${suggestTicketReply(t)}</textarea></div>
+    <div class="muted">${escapeHtml(t.subject)} · ${escapeHtml(t.category)}</div>
+    <div class="field"><label>نص الرد</label><textarea id="tk-reply-text">${escapeHtml(suggestTicketReply(t))}</textarea></div>
     <button class="btn btn-primary" onclick="replyTicket('${id}')">${icon('check')} إرسال الرد</button>
   `);
 }
 window.openReplyTicketSheet = openReplyTicketSheet;
 
 async function replyTicket(id){
+  if (!state.authProfile || state.authProfile.role !== 'admin') {
+    toast('لا تملك صلاحية الرد على التذاكر');
+    return;
+  }
   const replyText = document.getElementById('tk-reply-text').value.trim();
   if (!replyText) { toast('الرجاء كتابة نص الرد'); return; }
   const { error } = await sb.from('tickets').update({ status:'تم الرد', reply: replyText }).eq('id', id);
@@ -827,7 +1263,7 @@ function bottomNav(){
 // شريط عائم لحساب "الأدمن التقني" فقط — يسمح بمعاينة التطبيق بأي دور دون تسجيل خروج
 function superAdminBar(){
   if (!(state.authProfile && state.authProfile.is_super_admin)) return '';
-  const roles = [ ['client','عميل'], ['trainer','مدرب'], ['admin','إدارة'] ];
+  const roles = [ ['client','عميلة'], ['trainer','مدربة'], ['admin','إدارة'] ];
   return `<div style="position:absolute; bottom:76px; left:12px; z-index:45; display:flex; flex-direction:column; gap:3px; background:rgba(15,20,30,.9); backdrop-filter:blur(10px); padding:4px; border-radius:12px; box-shadow:var(--shadow-md);">
     ${roles.map(([r,label])=>`<button onclick="setRole('${r}')" style="border:none; border-radius:9px; padding:6px 10px; font-size:10.5px; font-weight:800; cursor:pointer; background:${state.role===r?'#fff':'transparent'}; color:${state.role===r?'var(--brand-700)':'#fff'}; white-space:nowrap;">${label}</button>`).join('')}
   </div>`;
@@ -855,13 +1291,14 @@ function backBar(title, backRoute){
 // =========================================================
 function screenLogin(){
   return `<div class="view no-pad" style="display:flex;flex-direction:column;min-height:100%;">
-    <div style="background:var(--brand-900);padding:44px 24px 34px;color:#fff;border-radius:0 0 32px 32px;">
-      <img src="${typeof LOGO_DATA_URI!=='undefined'?LOGO_DATA_URI:''}" alt="AOL GYM" style="height:56px;width:auto;display:block;margin-bottom:14px;" />
-      <div style="font-size:12px;opacity:.85;">تطبيق صالة أكاديمية التعلم</div>
-      <p style="margin:6px 0 0;font-size:13px;opacity:.85;line-height:1.8;">تطبيق صالة أكاديمية التعلم الرياضية — متاح مجاناً لجميع المتدربين والطاقم الإداري، للحجز والمتابعة الصحية والتدريبية.</p>
+    <div class="auth-hero">
+      <img class="auth-logo" src="${typeof LOGO_DATA_URI!=='undefined'?LOGO_DATA_URI:''}" alt="AOL GYM" />
+      <div class="auth-kicker">تطبيق صالة أكاديمية التعلم</div>
+      <p>كل ما تحتاجينه للحجز، المتابعة الصحية، وبرامج التدريب في مكان واحد.</p>
     </div>
-    <div style="padding:22px 20px;flex:1;">
-      <div class="tabs" style="margin-top:0;">
+    <div class="auth-body">
+      <div class="auth-heading"><h1>${state.authMode==='signin'?'مرحباً بعودتك':'أنشئي حسابك'}</h1><span>${state.authMode==='signin'?'سجّلي الدخول للمتابعة':'لنبدأ بتجهيز ملفك الرياضي'}</span></div>
+      <div class="tabs auth-tabs">
         <button class="tab ${state.authMode==='signin'?'active':''}" onclick="setAuthMode('signin')">تسجيل الدخول</button>
         <button class="tab ${state.authMode==='signup'?'active':''}" onclick="setAuthMode('signup')">إنشاء حساب جديد</button>
       </div>
@@ -875,20 +1312,25 @@ function screenLogin(){
       <div class="field"><label>كلمة المرور</label><input id="auth-password" type="password" placeholder="••••••••" /></div>
       ${state.authMode==='signin' ? `<div style="text-align:left;margin:-8px 0 12px;"><span style="font-size:12px;color:var(--brand-600);font-weight:700;cursor:pointer;" onclick="goForgotPassword()">نسيت كلمة المرور؟</span></div>` : ''}
 
-      ${state.authMode==='signup' ? `<div class="sidebar-note" style="margin-top:-4px;">بعد إنشاء الحساب وتسجيل الدخول، سنطلب منك اختيار نوع حسابك وفرعك لإكمال ملفك الشخصي.</div>` : ''}
+      ${state.authMode==='signup' ? `<div class="auth-note">بعد إنشاء الحساب، سنطلب منك اختيار نوع الحساب والفرع لإكمال ملفك الشخصي.</div>` : ''}
 
-      ${state.authError ? `<div style="background:#fdecec;color:var(--danger);border-radius:12px;padding:10px 12px;font-size:12px;margin-bottom:12px;">${state.authError}</div>` : ''}
+      ${state.authError ? `<div class="auth-alert">${state.authError}</div>` : ''}
 
       ${state.authMode==='signin'
         ? `<button class="btn btn-primary" ${state.authBusy?'disabled':''} onclick="realSignIn()">${state.authBusy?'جاري الدخول...':'تسجيل الدخول'}</button>`
         : `<button class="btn btn-primary" ${state.authBusy?'disabled':''} onclick="realSignUp()">${state.authBusy?'جاري الإنشاء...':'إنشاء الحساب'}</button>`
       }
-      <div class="sidebar-note" style="text-align:center;">حسابك هنا خاص بك ومحمي — بيانات الدخول تُحفظ بشكل آمن عبر Supabase.</div>
+      <button class="btn btn-outline" style="margin-top:8px;" onclick="openDataExplorer('login')">${icon('chart')} استكشاف البيانات التجريبية</button>
+      <div class="auth-security">حسابك خاص بك وبيانات الدخول محمية عبر Supabase.</div>
 
       ${state.authMode==='signin' && IS_DEMO_BUILD ? `
-      <div class="section-title" style="margin-top:18px;"><h3>حسابات تجريبية سريعة</h3></div>
-      ${DEMO_ACCOUNTS.map(a=>`<button class="btn btn-outline" style="margin-bottom:8px;" ${state.authBusy?'disabled':''} onclick="quickLogin('${a.email}','${a.password}')">${a.label}</button>`).join('')}
-      <div class="sidebar-note" style="text-align:center;">تحتاجين تنشئي هذه الحسابات مرة واحدة فقط من تبويب "إنشاء حساب جديد"</div>
+      <details class="auth-demo">
+        <summary>عرض الحسابات التجريبية</summary>
+        <div class="auth-demo-content">
+          ${DEMO_ACCOUNTS.map(a=>`<button class="btn btn-outline" style="margin-bottom:8px;" ${state.authBusy?'disabled':''} onclick="quickLogin('${a.email}','${a.password}')">${a.label}</button>`).join('')}
+          <div class="sidebar-note">أنشئي الحساب التجريبي مرة واحدة أولاً من تبويب «إنشاء حساب جديد».</div>
+        </div>
+      </details>
       ` : ''}
     </div>
   </div>`;
@@ -1116,6 +1558,119 @@ function emptyState(text){
   return `<div class="empty-state">${icon('calendar')}<p>${text}</p></div>`;
 }
 
+function renderExplorerDetailValue(value){
+  if (Array.isArray(value)) {
+    if (!value.length) return `<span class="badge badge-gray">لا توجد بيانات</span>`;
+    if (value.every((item) => item == null || typeof item !== 'object')) {
+      return `<div class="explorer-pill-list">${value.map((item) => `<span class="badge badge-gray">${escapeHtml(String(item))}</span>`).join('')}</div>`;
+    }
+    return `<pre class="explorer-json">${escapeHtml(JSON.stringify(value, null, 2))}</pre>`;
+  }
+  if (value && typeof value === 'object') {
+    return `<pre class="explorer-json">${escapeHtml(JSON.stringify(value, null, 2))}</pre>`;
+  }
+  if (typeof value === 'boolean') {
+    return `<span class="badge ${value ? 'badge-green' : 'badge-gray'}">${value ? 'نعم' : 'لا'}</span>`;
+  }
+  return `<span>${escapeHtml(String(value == null || value === '' ? '—' : value))}</span>`;
+}
+
+function openExplorerRecord(datasetKey, index){
+  const dataset = getExplorerCatalog().find((item) => item.key === datasetKey);
+  const record = dataset && dataset.items[index];
+  if (!record) {
+    toast('تعذر فتح تفاصيل هذا السجل');
+    return;
+  }
+
+  openSheet(`
+    <h3>${escapeHtml(record.title)}</h3>
+    <div class="muted">${escapeHtml(dataset.label)} · ${escapeHtml(dataset.sectionLabel)}</div>
+    ${record.subtitle ? `<div class="explorer-detail-subtitle">${escapeHtml(record.subtitle)}</div>` : ''}
+    ${record.badges.length ? `<div class="explorer-pill-list" style="margin-bottom:14px;">${record.badges.map((badge) => `<span class="badge badge-blue">${escapeHtml(String(badge))}</span>`).join('')}</div>` : ''}
+    <div class="explorer-detail-list">
+      ${Object.entries(record.raw).map(([key, value]) => `
+        <div class="explorer-detail-row">
+          <b>${escapeHtml(explorerFieldLabel(key))}</b>
+          <div>${renderExplorerDetailValue(value)}</div>
+        </div>
+      `).join('')}
+    </div>
+  `);
+}
+window.openExplorerRecord = openExplorerRecord;
+
+function screenDataExplorer(){
+  const { catalog, scopedCatalog, records, section, dataset, search } = getExplorerView();
+  const matchedDatasets = new Set(records.map((record) => record.datasetKey)).size;
+  const totalRecords = catalog.reduce((sum, item) => sum + item.count, 0);
+  const activeDataset = dataset === 'all' ? null : scopedCatalog.find((item) => item.key === dataset);
+
+  return `<div class="view explorer-view">
+    ${backBar('مستكشف البيانات', getExplorerBackRoute())}
+    <div class="explorer-hero">
+      <div class="explorer-hero-kicker">Interactive Explorer</div>
+      <h3>استكشاف كامل بيانات النموذج من مكان واحد</h3>
+      <p>فلتر حسب القسم أو مجموعة البيانات، وابحث داخل السجلات، ثم افتح أي عنصر لمشاهدة تفاصيله كاملة.</p>
+    </div>
+
+    <div class="card explorer-toolbar">
+      <div class="field" style="margin-bottom:10px;">
+        <label>بحث مباشر داخل البيانات</label>
+        <input id="explorer-search" value="${escapeHtml(state.explorerSearch || '')}" oninput="setExplorerSearch(this.value)" placeholder="ابحثي بالاسم، الحالة، الموعد، المدربة، أو أي كلمة..." />
+      </div>
+
+      <div class="explorer-chip-row">
+        ${EXPLORER_SECTIONS.map((item) => `
+          <button class="explorer-chip ${section === item.key ? 'active' : ''}" onclick="setExplorerSection('${item.key}')">${item.label}</button>
+        `).join('')}
+      </div>
+
+      <div class="explorer-dataset-strip">
+        <button class="explorer-dataset-card ${dataset === 'all' ? 'active' : ''}" onclick="setExplorerDataset('all')">
+          <b>كل المصادر</b>
+          <span>${scopedCatalog.length} مجموعة</span>
+        </button>
+        ${scopedCatalog.map((item) => `
+          <button class="explorer-dataset-card ${dataset === item.key ? 'active' : ''}" onclick="setExplorerDataset('${item.key}')">
+            <b>${item.label}</b>
+            <span>${item.count} سجل</span>
+          </button>
+        `).join('')}
+      </div>
+    </div>
+
+    <div class="stat-grid explorer-stats">
+      <div class="stat-box"><div class="n">${records.length.toLocaleString('ar')}</div><div class="l">سجلات مطابقة</div></div>
+      <div class="stat-box"><div class="n">${matchedDatasets.toLocaleString('ar')}</div><div class="l">مصادر ظاهرة</div></div>
+      <div class="stat-box"><div class="n">${totalRecords.toLocaleString('ar')}</div><div class="l">إجمالي السجلات</div></div>
+      <div class="stat-box"><div class="n">${escapeHtml((activeDataset ? activeDataset.label : explorerSectionLabel(section)).slice(0, 12))}</div><div class="l">${activeDataset ? 'المجموعة المحددة' : 'القسم الحالي'}</div></div>
+    </div>
+
+    <div class="section-title">
+      <h3>${activeDataset ? activeDataset.label : 'السجلات المطابقة'}</h3>
+      <span class="link" onclick="clearExplorerFilters()">${search || dataset !== 'all' || section !== 'all' ? 'إعادة الضبط' : 'كل شيء ظاهر'}</span>
+    </div>
+
+    ${records.length ? records.map((record) => `
+      <button class="card explorer-record" onclick="openExplorerRecord('${record.datasetKey}', ${record.index})">
+        <div class="explorer-record-head">
+          <div class="explorer-record-badges">
+            <span class="badge badge-blue">${record.datasetLabel}</span>
+            <span class="badge badge-gray">${record.sectionLabel}</span>
+          </div>
+          <span class="explorer-record-arrow">${icon('chevron')}</span>
+        </div>
+        <h4>${escapeHtml(record.title)}</h4>
+        ${record.subtitle ? `<div class="explorer-record-subtitle">${escapeHtml(record.subtitle)}</div>` : ''}
+        ${record.preview.length ? `<div class="explorer-preview-grid">
+          ${record.preview.map((item) => `<div><b>${escapeHtml(item.label)}</b><span>${escapeHtml(item.value)}</span></div>`).join('')}
+        </div>` : `<div class="explorer-record-subtitle">اضغطي لعرض التفاصيل الكاملة</div>`}
+      </button>
+    `).join('') : emptyState('لا توجد سجلات تطابق الفلاتر الحالية')}
+  </div>`;
+}
+
 function screenClientProfile(){
   const u = DB.users.client;
   return `<div class="view">
@@ -1210,7 +1765,7 @@ function screenClientPrograms(){
         <p style="font-size:12.5px;color:var(--ink-700);line-height:1.8;margin:10px 0 0;">${p.notes}</p>
       </div>`).join('')}
 
-    <div class="section-title"><h3>أرشيف توصيات المدربين</h3></div>
+    <div class="section-title"><h3>أرشيف توصيات المدربات</h3></div>
     <div class="card">
       ${DB.trainerNotes.map(n=>`
         <div class="list-row" style="align-items:flex-start;">
@@ -1268,7 +1823,7 @@ function screenClientHistory(){
     ${!DB.bookings.length ? emptyState('لا يوجد سجل حجوزات بعد') : `<div class="card">
       ${DB.bookings.map(b=>`
         <div class="list-row"><span class="list-icon">${icon(b.status==='ملغي'?'x':'check')}</span><span class="meta"><b>${b.title}</b><span>${b.date} · ${b.time} · ${b.trainer}</span></span>
-        <span class="badge ${b.status==='مؤكد'?'badge-green':b.status==='منتهي'?'badge-gray':'badge-red'}">${b.status}</span></div>`).join('')}
+        ${b.status==='منتهي' ? `<button class="btn btn-outline btn-sm" onclick="openRatingSheet('${b.id}')">${icon('star')} تقييم</button>` : `<span class="badge ${b.status==='مؤكد'?'badge-green':'badge-red'}">${b.status}</span>`}</div>`).join('')}
     </div>`}
   </div>`;
 }
@@ -1283,23 +1838,22 @@ function screenClientSupport(){
       <div class="card" style="margin-bottom:10px;">
         <div style="display:flex;justify-content:space-between;align-items:flex-start;">
           <div>
-            <span class="badge badge-gray">${t.category}</span>
-            <div style="font-weight:700;font-size:13.5px;margin-top:6px;">${t.subject}</div>
-            <div style="font-size:11px;color:var(--ink-500);margin-top:2px;">${t.id} · ${t.date}</div>
+             <span class="badge badge-gray">${escapeHtml(t.category)}</span>
+             <div style="font-weight:700;font-size:13.5px;margin-top:6px;">${escapeHtml(t.subject)}</div>
+             <div style="font-size:11px;color:var(--ink-500);margin-top:2px;">${escapeHtml(t.id)} · ${escapeHtml(t.date)}</div>
           </div>
           <span class="badge ${t.status==='تم الرد'?'badge-green':t.status==='مغلقة'?'badge-gray':'badge-orange'}">${t.status}</span>
         </div>
-        ${t.reply?`<div style="background:var(--surface-sunken);border-radius:12px;padding:10px 12px;margin-top:10px;font-size:12px;line-height:1.7;color:var(--ink-700);">${icon('support')} ${t.reply}</div>`:''}
+         ${t.reply?`<div style="background:var(--surface-sunken);border-radius:12px;padding:10px 12px;margin-top:10px;font-size:12px;line-height:1.7;color:var(--ink-700);">${icon('support')} ${escapeHtml(t.reply)}</div>`:''}
       </div>`).join('')}
   </div>`;
 }
 
 function screenClientSupportNew(){
-  const cats = ['فني','إداري','ملاحظات','اقتراحات'];
   return `<div class="view">
     ${backBar('طلب دعم جديد','client-support')}
-    <div class="field"><label>نوع الطلب</label>
-      <div class="seg">${cats.map(c=>`<button class="seg-opt ${state.ticketDraft.category===c?'active':''}" onclick="setTicketCategory('${c}')">${c}</button>`).join('')}</div>
+    <div class="field"><label>اختاري تصنيف الطلب</label>
+      <div class="support-categories">${SUPPORT_CATEGORIES.map(c=>`<button class="support-category ${state.ticketDraft.category===c.label?'active':''}" onclick="setTicketCategory('${c.label}')"><b>${c.label}</b><span>${c.hint}</span></button>`).join('')}</div>
     </div>
     <div class="field"><label>عنوان الطلب</label><input id="tk-subject" placeholder="مثال: مشكلة في تسجيل الحضور" value="${state.ticketDraft.subject||''}" /></div>
     <div class="field"><label>تفاصيل الطلب</label><textarea id="tk-message" placeholder="اكتب وصفاً تفصيلياً...">${state.ticketDraft.message||''}</textarea></div>
@@ -1324,6 +1878,7 @@ function screenClientNotifications(){
 
 function screenClientCheckin(){
   const u = DB.users.client;
+  const attendance = DB.clientAttendance || [];
   return `<div class="view" style="text-align:center;">
     ${topBar('الدخول والخروج', 'اعرض الرمز عند البوابة لتسجيل الحضور')}
     <div class="card" style="padding:26px;">
@@ -1331,12 +1886,10 @@ function screenClientCheckin(){
       <div style="margin-top:14px;font-weight:800;">${u.name}</div>
       <div style="font-size:12px;color:var(--ink-500);">${u.membership.track} · ${icon('check')} عضوية فعّالة</div>
     </div>
-    <button class="btn btn-primary" style="margin-top:16px;" onclick="simulateScan()">${icon('scan')} محاكاة مسح الرمز (للتجربة)</button>
+    <button class="btn btn-primary" style="margin-top:16px;" onclick="recordMyAttendance()">${icon('scan')} تسجيل دخول / خروج</button>
     <div class="section-title" style="text-align:right;"><h3>آخر مرات الحضور</h3></div>
     <div class="card">
-      <div class="list-row"><span class="list-icon">${icon('check')}</span><span class="meta"><b>دخول</b><span>اليوم · 06:52 ص</span></span></div>
-      <div class="list-row"><span class="list-icon">${icon('check')}</span><span class="meta"><b>خروج</b><span>أمس · 08:40 ص</span></span></div>
-      <div class="list-row"><span class="list-icon">${icon('check')}</span><span class="meta"><b>دخول</b><span>أمس · 07:15 ص</span></span></div>
+      ${attendance.length ? attendance.map(item=>`<div class="list-row"><span class="list-icon">${icon('check')}</span><span class="meta"><b>${escapeHtml(item.type)}</b><span>${escapeHtml(item.time)}</span></span></div>`).join('') : emptyState('لا توجد عمليات حضور مسجلة بعد')}
     </div>
   </div>`;
 }
@@ -1403,8 +1956,8 @@ function screenTrainerHome(){
       ${requests.map(r=>`
         <div class="list-row" style="align-items:flex-start;">
           <span class="list-icon">${icon('chart')}</span>
-          <span class="meta"><b>${r.fullName}</b><span>طلب حجز موعد قياس · ${r.date}</span></span>
-          <button class="btn btn-primary btn-sm" onclick="openAddInbodySheet('${r.userId}','${(r.fullName||'').replace(/'/g,'')}')">${icon('check')} تسجيل القياس</button>
+          <span class="meta"><b>${escapeHtml(r.fullName)}</b><span>طلب حجز موعد قياس · ${escapeHtml(r.date)}</span></span>
+          <button class="btn btn-primary btn-sm" onclick="openAddInbodySheet('${r.userId}')">${icon('check')} تسجيل القياس</button>
         </div>`).join('')}
     </div>` : ''}
     <div class="section-title"><h3>الجلسات الخاصة</h3></div>
@@ -1423,16 +1976,16 @@ function screenTrainerClients(){
   const rows = DB.realClients || [];
   return `<div class="view">
     ${topBar('متدربيّ', rows.length + ' متدرب مسجّل')}
-    ${!rows.length ? emptyState('لا يوجد متدربون مسجّلون بعد') : ''}
+    ${!rows.length ? emptyState('لا يوجد متدربون مسندون لحسابك بعد') : ''}
     ${rows.map(r=>`
       <div class="card" style="margin-bottom:10px;">
         <div class="list-row" style="border:none;padding:0;">
-          <span class="trainer-avatar" style="width:40px;height:40px;">${(r.full_name||'—').split(' ').map(w=>w[0]).slice(0,2).join('')}</span>
-          <span class="meta"><b>${r.full_name || '—'}</b><span>${r.branch || '—'}${r.phone ? ' · ' + r.phone : ''}</span></span>
+           <span class="trainer-avatar" style="width:40px;height:40px;">${escapeHtml((r.full_name||'—').split(' ').map(w=>w[0]).slice(0,2).join(''))}</span>
+           <span class="meta"><b>${escapeHtml(r.full_name || '—')}</b><span>${escapeHtml(r.branch || '—')}${r.phone ? ' · ' + escapeHtml(r.phone) : ''}</span></span>
         </div>
         <div style="display:flex;gap:8px;margin-top:10px;">
-          <button class="btn btn-outline btn-sm" style="flex:1;" onclick="openAddInbodySheet('${r.id}','${(r.full_name||'').replace(/'/g,'')}')">${icon('chart')} قياس InBody</button>
-          <button class="btn btn-outline btn-sm" style="flex:1;" onclick="openAddProgramSheet('${r.id}','${(r.full_name||'').replace(/'/g,'')}')">${icon('edit')} برنامج / ملاحظة</button>
+          <button class="btn btn-outline btn-sm" style="flex:1;" onclick="openAddInbodySheet('${r.id}')">${icon('chart')} قياس InBody</button>
+          <button class="btn btn-outline btn-sm" style="flex:1;" onclick="openAddProgramSheet('${r.id}')">${icon('edit')} برنامج / ملاحظة</button>
         </div>
       </div>`).join('')}
   </div>`;
@@ -1443,7 +1996,7 @@ function screenTrainerRatings(){
   const trainerName = p.full_name || DB.users.trainer.name;
   const me = DB.trainerRatings.find(r=>r.trainer===trainerName) || { avg:0, count:0 };
   return `<div class="view">
-    ${topBar('تقييماتي', 'آراء العملاء حول جلساتك')}
+    ${topBar('تقييماتي', 'آراء المتدربات حول جلساتك')}
     <div class="card" style="text-align:center;">
       <div style="font-size:38px;font-weight:800;color:var(--brand-700);">${me.count ? me.avg : '—'}</div>
       <div class="rating">${[1,2,3,4,5].map(i=>`<span>${icon('star')}</span>`).join('')}</div>
@@ -1477,6 +2030,7 @@ function screenAdminDashboard(){
       <button class="stat-box" style="text-align:right;" onclick="go('admin-offers')"><span class="list-icon" style="margin-bottom:8px;">${icon('megaphone')}</span><div class="n" style="font-size:13px;">العروض والإشعارات</div></button>
       <button class="stat-box" style="text-align:right;" onclick="go('admin-checkin')"><span class="list-icon" style="margin-bottom:8px;">${icon('qr')}</span><div class="n" style="font-size:13px;">سجل الحضور</div></button>
       <button class="stat-box" style="text-align:right;" onclick="go('admin-support')"><span class="list-icon" style="margin-bottom:8px;">${icon('support')}</span><div class="n" style="font-size:13px;">تذاكر الدعم</div></button>
+      <button class="stat-box" style="text-align:right;" onclick="openDataExplorer('admin-dashboard')"><span class="list-icon" style="margin-bottom:8px;">${icon('chart')}</span><div class="n" style="font-size:13px;">مستكشف البيانات</div></button>
     </div>
 
     <div class="section-title"><h3>تنبيهات إدارية</h3></div>
@@ -1543,9 +2097,9 @@ function screenAdminClassesNew(){
     <div class="field"><label>الفرع</label><select id="cls-branch">${BRANCHES.map(b=>`<option ${editing&&editing.branch===b?'selected':''}>${b}</option>`).join('')}</select></div>
     <div class="field"><label>اليوم</label><select id="cls-day">${DB.weekDays.map(d=>`<option ${editing&&editing.day===d?'selected':''}>${d}</option>`).join('')}</select></div>
     <div class="field"><label>الوقت</label><input type="time" id="cls-time" min="08:00" max="20:00" value="${editing?parseTimeToHHMM(editing.time):''}" /><div class="muted" style="margin-top:4px;">أوقات العمل الرسمية: 8:00 ص — 8:00 م</div></div>
-    <div class="field"><label>المدرب</label>
+    <div class="field"><label>المدربة</label>
       <select id="cls-trainer">
-        ${trainers.length ? trainers.map(t=>`<option ${editing&&editing.trainer===t?'selected':''}>${t}</option>`).join('') : '<option value="">لا يوجد مدربون مسجّلون بعد</option>'}
+        ${trainers.length ? trainers.map(t=>`<option ${editing&&editing.trainer===t?'selected':''}>${t}</option>`).join('') : '<option value="">لا توجد مدربات مسجلات بعد</option>'}
       </select>
     </div>
     <div class="field"><label>السعة القصوى</label><input type="number" id="cls-capacity" placeholder="16" value="${editing?editing.capacity:16}" /></div>
@@ -1573,7 +2127,7 @@ function screenAdminOffers(){
         <div style="font-size:11px;color:var(--ink-500);margin-top:8px;">${icon('users')} وصل إلى ${o.reach} عضو</div>
       </div>`).join('') : emptyState('لا توجد عروض مُرسلة بعد')}
 
-    <div class="section-title"><h3>تقييمات المدربين</h3></div>
+    <div class="section-title"><h3>تقييمات المدربات</h3></div>
     <div class="card">
       ${DB.trainerRatings.length ? DB.trainerRatings.map(r=>`<div class="list-row"><span class="list-icon">${icon('star')}</span><span class="meta"><b>${r.trainer}</b><span>${r.count} تقييم</span></span><b>${r.avg}</b></div>`).join('') : emptyState('لا توجد تقييمات بعد')}
     </div>
@@ -1586,8 +2140,8 @@ function screenAdminReports(){
   return `<div class="view">
     ${topBar('التقارير والإحصائيات', 'تقارير أسبوعية وشهرية قابلة للتصدير')}
     <div class="btn-row">
-      <button class="btn btn-outline" onclick="toast('جاري تجهيز ملف PDF للتحميل...')">${icon('download')} تصدير PDF</button>
-      <button class="btn btn-outline" onclick="toast('جاري تجهيز ملف Excel للتحميل...')">${icon('download')} تصدير Excel</button>
+      <button class="btn btn-outline" onclick="printReport()">${icon('download')} تصدير PDF</button>
+      <button class="btn btn-outline" onclick="exportReportCsv()">${icon('download')} تصدير Excel</button>
     </div>
 
     <div class="section-title"><h3>معدل الحضور الأسبوعي</h3></div>
@@ -1644,7 +2198,7 @@ window.setAdminTicketFilter = setAdminTicketFilter;
 
 function screenAdminSupport(){
   const filter = state.adminTicketFilter || 'الكل';
-  const cats = ['الكل','فني','إداري','ملاحظات','اقتراحات'];
+  const cats = ['الكل', ...SUPPORT_CATEGORIES.map(c => c.label)];
   const filtered = filter === 'الكل' ? DB.tickets : DB.tickets.filter(t=>t.category===filter);
   return `<div class="view">
     ${topBar('تذاكر الدعم الفني', DB.tickets.filter(t=>t.status!=='مغلقة').length + ' تذكرة نشطة')}
@@ -1692,7 +2246,7 @@ function screenAdminPermissions(){
 }
 
 function openInviteStaffSheet(){
-  const accessOptions = (DB.roles && DB.roles.length) ? DB.roles.map(r=>r.role) : ['متدرب','مدرب','إدارة'];
+  const accessOptions = (DB.roles && DB.roles.length) ? DB.roles.map(r=>r.role) : ['متدربة','مدربة','إدارة'];
   openSheet(`
     <h3>دعوة عضو جديد للفريق</h3>
     <div class="muted">يُضاف مباشرة إلى قائمة أعضاء الفريق وصلاحياته</div>
@@ -1760,13 +2314,13 @@ async function requestInbodyMeasurement(){
     sb.from('inbody_requests').insert({ user_id: state.authUser.id, status: 'pending' }),
     sb.from('tickets').insert({
       user_id: state.authUser.id,
-      category: 'إداري',
+      category: 'القياسات والبرامج',
       subject: 'طلب حجز موعد قياس InBody جديد',
       message: 'يرجى التواصل معي لتحديد موعد قياس InBody جديد.',
     }),
   ]);
   if (reqRes.error) { toast('حدث خطأ: ' + reqRes.error.message); return; }
-  toast('تم إرسال طلبك، سيتواصل معك المدرب لتحديد الموعد');
+  toast('تم إرسال طلبك، ستتواصل معك المدربة لتحديد الموعد');
   await loadLiveData();
 }
 window.requestInbodyMeasurement = requestInbodyMeasurement;
@@ -1774,9 +2328,11 @@ window.requestInbodyMeasurement = requestInbodyMeasurement;
 // =========================================================
 // شاشات المدرب — أدوات إدخال حقيقية لبيانات المتدربين
 // =========================================================
-function openAddInbodySheet(clientId, clientName){
+function openAddInbodySheet(clientId){
+  const client = (DB.realClients || []).find(row => row.id === clientId);
+  const clientName = client ? client.full_name : 'المتدرب';
   openSheet(`
-    <h3>قياس InBody جديد — ${clientName}</h3>
+    <h3>قياس InBody جديد — ${escapeHtml(clientName)}</h3>
     <div class="muted">سيظهر هذا القياس فوراً في الملف الشخصي للمتدربة/المتدرب</div>
     <div class="field"><label>الوزن (كجم)</label><input id="ib-weight" type="number" step="0.1" placeholder="مثال: 74.5" /></div>
     <div class="field"><label>الكتلة العضلية (%)</label><input id="ib-muscle" type="number" step="0.1" placeholder="مثال: 33.2" /></div>
@@ -1787,6 +2343,10 @@ function openAddInbodySheet(clientId, clientName){
 window.openAddInbodySheet = openAddInbodySheet;
 
 async function submitAddInbody(clientId){
+  if (!state.authProfile || state.authProfile.role !== 'trainer' || !(DB.realClients || []).some(client => client.id === clientId)) {
+    toast('لا تملك صلاحية تسجيل قياس لهذا المتدرب');
+    return;
+  }
   const weight = parseFloat(document.getElementById('ib-weight').value);
   const muscle = parseFloat(document.getElementById('ib-muscle').value);
   const fat = parseFloat(document.getElementById('ib-fat').value);
@@ -1802,9 +2362,11 @@ async function submitAddInbody(clientId){
 }
 window.submitAddInbody = submitAddInbody;
 
-function openAddProgramSheet(clientId, clientName){
+function openAddProgramSheet(clientId){
+  const client = (DB.realClients || []).find(row => row.id === clientId);
+  const clientName = client ? client.full_name : 'المتدرب';
   openSheet(`
-    <h3>برنامج / ملاحظة جديدة — ${clientName}</h3>
+    <h3>برنامج / ملاحظة جديدة — ${escapeHtml(clientName)}</h3>
     <div class="muted">سيظهر هذا فوراً ضمن "برامجي التدريبية والغذائية" لدى المتدرب</div>
     <div class="field"><label>النوع</label><select id="pg-type"><option value="تدريبي">تدريبي</option><option value="غذائي">غذائي</option><option value="ملاحظة">ملاحظة تدريبية</option></select></div>
     <div class="field"><label>العنوان</label><input id="pg-title" placeholder="مثال: برنامج بناء القوة - المرحلة 1" /></div>
@@ -1815,6 +2377,10 @@ function openAddProgramSheet(clientId, clientName){
 window.openAddProgramSheet = openAddProgramSheet;
 
 async function submitAddProgram(clientId){
+  if (!state.authProfile || state.authProfile.role !== 'trainer' || !(DB.realClients || []).some(client => client.id === clientId)) {
+    toast('لا تملك صلاحية إضافة برنامج لهذا المتدرب');
+    return;
+  }
   const type = document.getElementById('pg-type').value;
   const title = document.getElementById('pg-title').value.trim();
   const notes = document.getElementById('pg-notes').value.trim();
@@ -1833,6 +2399,7 @@ window.submitAddProgram = submitAddProgram;
 // =========================================================
 const SCREENS = {
   'login': screenLogin,
+  'data-explorer': screenDataExplorer,
   'complete-profile': screenCompleteProfile,
   'forgot-password': screenForgotPassword,
   'reset-password': screenResetPassword,

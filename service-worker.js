@@ -4,11 +4,11 @@
 // بحيث يفتح التطبيق فوراً وحتى بدون إنترنت (أو باتصال ضعيف).
 // =========================================================
 
-const CACHE_NAME = 'aol-gym-v2';
+const CACHE_NAME = 'aol-gym-v9';
 const CORE_ASSETS = [
   './',
   './index.html',
-  './styles.css',
+  './styles.css?v=7',
   './icons.js',
   './logo.js',
   './data.js',
