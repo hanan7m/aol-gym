@@ -622,6 +622,7 @@ async function saveClass(){
   const trainer = document.getElementById('cls-trainer').value;
   const capacity = Number(document.getElementById('cls-capacity').value) || 16;
   if(!name || !timeRaw){ toast('الرجاء تعبئة اسم الصف الرياضي والوقت'); return; }
+  if (timeRaw < '08:00' || timeRaw > '20:00') { toast('الوقت يجب أن يكون ضمن أوقات العمل الرسمية: 8:00 ص — 8:00 م'); return; }
   const time = formatTimeAr(timeRaw);
   const editing = state.editingClass;
 
@@ -646,10 +647,37 @@ async function deleteClass(id){
 }
 window.deleteClass = deleteClass;
 
+// اقتراح رد مبدئي يعتمد على تصنيف التذكرة وموضوعها — نقطة بداية يعدّلها الموظف قبل الإرسال
+function suggestTicketReply(t){
+  const subj = (t.subject || '').trim();
+  const byCategory = {
+    'فني': `مرحباً، شكراً لإبلاغنا بخصوص "${subj}". قام فريقنا التقني بمراجعة المشكلة وسنعمل على حلها في أقرب وقت، وسنوافيك بأي تحديث.`,
+    'إداري': `مرحباً، تم استلام طلبك الإداري بخصوص "${subj}" وسيتم التواصل معك ومتابعته من قبل الإدارة قريباً.`,
+    'ملاحظات': `مرحباً، نشكرك على ملاحظتك بخصوص "${subj}"، تم توثيقها ورفعها للفريق المختص للاطلاع عليها.`,
+    'اقتراحات': `مرحباً، شكراً لاقتراحك بخصوص "${subj}"! تم رفعه لفريق التطوير وسيتم دراسته ضمن التحديثات القادمة.`,
+  };
+  return byCategory[t.category] || `مرحباً، شكراً لتواصلك بخصوص "${subj}"، سنعمل على متابعة الأمر والرد عليك في أقرب وقت.`;
+}
+
+function openReplyTicketSheet(id){
+  const t = DB.tickets.find(x=>x.id===id);
+  if (!t) return;
+  openSheet(`
+    <h3>الرد على التذكرة</h3>
+    <div class="muted">${t.subject} · ${t.category}</div>
+    <div class="field"><label>نص الرد</label><textarea id="tk-reply-text">${suggestTicketReply(t)}</textarea></div>
+    <button class="btn btn-primary" onclick="replyTicket('${id}')">${icon('check')} إرسال الرد</button>
+  `);
+}
+window.openReplyTicketSheet = openReplyTicketSheet;
+
 async function replyTicket(id){
-  const { error } = await sb.from('tickets').update({ status:'تم الرد', reply:'شكراً لتواصلك، تم حل المشكلة من قبل فريق الدعم الفني.' }).eq('id', id);
+  const replyText = document.getElementById('tk-reply-text').value.trim();
+  if (!replyText) { toast('الرجاء كتابة نص الرد'); return; }
+  const { error } = await sb.from('tickets').update({ status:'تم الرد', reply: replyText }).eq('id', id);
   if (error) { toast('حدث خطأ: ' + error.message); return; }
   toast('تم إرسال الرد للعميل');
+  closeSheet();
   await loadLiveData();
   render();
 }
@@ -1474,7 +1502,7 @@ function screenAdminClassesNew(){
     <div class="field"><label>اسم الصف الرياضي</label><input id="cls-name" placeholder="مثال: يوغا مسائية" value="${editing?editing.name:''}" /></div>
     <div class="field"><label>الفرع</label><select id="cls-branch">${BRANCHES.map(b=>`<option ${editing&&editing.branch===b?'selected':''}>${b}</option>`).join('')}</select></div>
     <div class="field"><label>اليوم</label><select id="cls-day">${DB.weekDays.map(d=>`<option ${editing&&editing.day===d?'selected':''}>${d}</option>`).join('')}</select></div>
-    <div class="field"><label>الوقت</label><input type="time" id="cls-time" value="${editing?parseTimeToHHMM(editing.time):''}" /></div>
+    <div class="field"><label>الوقت</label><input type="time" id="cls-time" min="08:00" max="20:00" value="${editing?parseTimeToHHMM(editing.time):''}" /><div class="muted" style="margin-top:4px;">أوقات العمل الرسمية: 8:00 ص — 8:00 م</div></div>
     <div class="field"><label>المدرب</label>
       <select id="cls-trainer">
         ${trainers.length ? trainers.map(t=>`<option ${editing&&editing.trainer===t?'selected':''}>${t}</option>`).join('') : '<option value="">لا يوجد مدربون مسجّلون بعد</option>'}
@@ -1590,7 +1618,7 @@ function screenAdminSupport(){
           <span class="badge ${t.status==='تم الرد'?'badge-green':t.status==='مغلقة'?'badge-gray':'badge-orange'}">${t.status}</span>
         </div>
         ${t.reply?`<div style="background:var(--surface-sunken);border-radius:12px;padding:10px 12px;margin-top:10px;font-size:12px;line-height:1.7;">${t.reply}</div>`:`
-        <button class="btn btn-primary btn-sm" style="margin-top:10px;" onclick="replyTicket('${t.id}')">${icon('check')} إرسال رد جاهز</button>`}
+        <button class="btn btn-primary btn-sm" style="margin-top:10px;" onclick="openReplyTicketSheet('${t.id}')">${icon('edit')} كتابة رد</button>`}
       </div>`).join('') : emptyState('لا توجد تذاكر في هذا التصنيف')}
   </div>`;
 }
