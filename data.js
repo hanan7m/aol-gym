@@ -31,6 +31,9 @@ const DB = {
   ],
   realClients: [],
   inbodyRequests: [],
+  trackChangeRequests: [],
+  ratedBookingIds: [],
+  trainerProfiles: [],
   trainerNotes: [
     { date:'2026-08-10', trainer:'كابتن نورة الحربي', note:'تحسن ملحوظ في الأداء هذا الأسبوع، استمري بنفس الوتيرة وركزي على تمارين الإطالة بعد كل جلسة.' },
     { date:'2026-08-03', trainer:'كابتن نورة الحربي', note:'يُفضّل رفع كمية الماء اليومية والانتباه لوضعية الظهر أثناء تمرين الرفعة المميتة.' },
@@ -81,10 +84,10 @@ const DB = {
     { id:'o3', title:'دعوة كلاس زومبا خاص', audience:'مسار اللياقة والتأهيل', status:'منتهي', sent:'2026-07-22', reach:96 },
   ],
   trainerRatings: [
-    { trainer:'نورة الحربي', avg:4.8, count:126 },
-    { trainer:'نورة الحربي', avg:4.9, count:203 },
-    { trainer:'ريم الدوسري', avg:4.6, count:88 },
-    { trainer:'فهد العنزي', avg:4.7, count:64 },
+    { trainerId:'t-2001', trainer:'نورة الحربي', avg:4.8, count:126 },
+    { trainerId:'t-2002', trainer:'نورة الحربي', avg:4.9, count:203 },
+    { trainerId:'t-2003', trainer:'ريم الدوسري', avg:4.6, count:88 },
+    { trainerId:'t-2004', trainer:'فهد العنزي', avg:4.7, count:64 },
   ],
 
   // ---------------- خامساً: التقارير والإدارة ----------------

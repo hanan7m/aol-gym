@@ -145,6 +145,27 @@ test('client workflows call the persisted rating, attendance, and track RPCs', a
   assert.ok(rpcNames.includes('request_track_change'));
 });
 
+test('completed bookings that were already rated do not offer a second rating', () => {
+  const app = createApp();
+  app.run("DB.bookings = [{ id: 'booking-1', title: 'جلسة', date: 'اليوم', time: '10:00', trainer: 'مدربة', status: 'منتهي' }]; DB.ratedBookingIds = ['booking-1'];");
+  const html = app.run('screenClientHistory()');
+  assert.match(html, /تم التقييم/);
+  assert.doesNotMatch(html, /openRatingSheet\('booking-1'\)/);
+});
+
+test('only an admin can send a track-change review RPC', async () => {
+  const app = createApp();
+  app.run("state.authProfile = { role: 'client' };");
+  await app.run("reviewTrackChange('request-1', true)");
+  assert.equal(app.calls.some(call => call.name === 'review_track_change'), false);
+
+  app.run("state.authProfile = { role: 'admin' };");
+  await app.run("reviewTrackChange('request-1', true)");
+  const rpc = app.calls.find(call => call.name === 'review_track_change');
+  assert.equal(rpc.args.p_request_id, 'request-1');
+  assert.equal(rpc.args.p_approve, true);
+});
+
 test('the security migrations include the role boundary and atomic booking function', () => {
   const security = fs.readFileSync(path.join(ROOT, 'supabase', 'migrations', '20260826_security_hardening.sql'), 'utf8');
   const booking = fs.readFileSync(path.join(ROOT, 'supabase', 'migrations', '20260826_atomic_private_slot_booking.sql'), 'utf8');
@@ -156,4 +177,8 @@ test('the security migrations include the role boundary and atomic booking funct
   assert.match(operations, /submit_session_rating/);
   assert.match(operations, /record_my_attendance/);
   assert.match(operations, /request_track_change/);
+  const integrity = fs.readFileSync(path.join(ROOT, 'supabase', 'migrations', '20260827_fix_workflow_integrity.sql'), 'utf8');
+  assert.match(integrity, /review_track_change/);
+  assert.match(integrity, /trainer_id uuid/);
+  assert.match(integrity, /pg_policies/);
 });

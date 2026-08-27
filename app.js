@@ -433,6 +433,10 @@ function lastInbody(){
   return (DB.inbody && DB.inbody.length) ? DB.inbody.at(-1) : { weight:'—', muscle:'—', fat:'—', date:'لا يوجد قياس بعد' };
 }
 
+function clientTrack(){
+  return state.authProfile?.training_track || DB.users.client.membership.track;
+}
+
 function go(route, params={}){
   state.route = route;
   state.params = params;
@@ -574,17 +578,18 @@ const DIPLOMAS = [
   'دبلوم تنظيم وإدارة الفعاليات',
   'دبلوم الموارد البشرية',
 ];
-function mapClass(r){ return { id:r.id, name:r.name, type:r.type, trainer:r.trainer_name, day:r.day, time:r.time, duration:r.duration, capacity:r.capacity, booked:r.booked, location:r.location, branch:r.branch }; }
-function mapSlot(r){ return { id:r.id, trainer:r.trainer_name, date:r.slot_date, time:r.slot_time, type:r.session_type, isBooked:r.is_booked, branch:r.branch }; }
+function mapClass(r){ return { id:r.id, name:r.name, type:r.type, trainer:r.trainer_name, trainerId:r.trainer_id, day:r.day, time:r.time, duration:r.duration, capacity:r.capacity, booked:r.booked, location:r.location, branch:r.branch }; }
+function mapSlot(r){ return { id:r.id, trainer:r.trainer_name, trainerId:r.trainer_id, date:r.slot_date, time:r.slot_time, type:r.session_type, isBooked:r.is_booked, branch:r.branch }; }
 function mapOffer(r){ return { id:r.id, title:r.title, audience:r.audience, status:r.status, sent:(r.created_at||'').slice(0,10), reach:r.reach }; }
-function mapBooking(r){ return { id:r.id, classId:r.class_id, slotId:r.slot_id, title:r.title, date:r.booking_date, time:r.booking_time, trainer:r.trainer_name, status:r.status }; }
+function mapBooking(r){ return { id:r.id, classId:r.class_id, slotId:r.slot_id, title:r.title, date:r.booking_date, time:r.booking_time, trainer:r.trainer_name, trainerId:r.trainer_id, status:r.status }; }
 function mapInbody(r){ return { id:r.id, date:r.record_date, weight:r.weight, muscle:r.muscle, fat:r.fat }; }
 function mapProgram(r){ return { id:r.id, type:r.type, title:r.title, trainer:r.trainer_name, date:r.program_date, notes:r.notes }; }
 function mapTicket(r){ return { id:r.id, category:normalizeTicketCategory(r.category), subject:r.subject, status:r.status, date:(r.created_at||'').slice(0,10), reply:r.reply, userId:r.user_id }; }
 function mapNotif(r){ return { id:r.id, title:r.title, body:r.body, type:r.type, read:r.read, time:relTimeAr(r.created_at) }; }
 function mapStaff(r){ return { id:r.id, name:r.name, role:r.role, access:r.access }; }
 function mapRole(r){ return { id:r.id, role:r.role, perms:r.perms||[] }; }
-function mapTrainerRating(r){ return { id:r.id, trainer:r.trainer, avg:r.avg, count:r.count }; }
+function mapTrainerRating(r){ return { trainerId:r.trainer_id, trainer:r.trainer, avg:r.avg, count:r.count }; }
+function mapTrackChangeRequest(r, fullName){ return { id:r.id, userId:r.user_id, fullName:fullName || '—', trackName:r.track_name, status:r.status, date:(r.created_at || '').slice(0, 10) }; }
 function mapAttendance(r){ return { id:r.id, name:r.member_name, type:r.type, method:r.method, time:arTime(r.occurred_at) }; }
 
 // All text from Supabase must be encoded before it is placed in an HTML template.
@@ -628,7 +633,7 @@ async function loadLiveData(){
       ? sb.from('tickets').select('*').eq('user_id', uid).order('created_at', { ascending: false })
       : Promise.resolve({ data: [], error: null });
 
-  const [classesRes, slotsRes, offersRes, ticketsRes, bookingsRes, inbodyRes, programsRes, notifRes, ratingsRes, attendanceRes] = await Promise.all([
+  const [classesRes, slotsRes, offersRes, ticketsRes, bookingsRes, inbodyRes, programsRes, notifRes, ratingsRes, attendanceRes, completedRatingsRes] = await Promise.all([
     sb.from('classes').select('*').order('day'),
     sb.from('private_slots').select('*').order('created_at'),
     sb.from('offers').select('*').order('created_at', { ascending: false }),
@@ -639,6 +644,7 @@ async function loadLiveData(){
     isAdminUser ? Promise.resolve({ data: [], error: null }) : sb.from('notifications').select('*').eq('user_id', uid).order('created_at', { ascending: false }),
     sb.from('trainer_ratings_live').select('*').order('avg', { ascending: false }),
     role === 'client' ? sb.from('attendance_log').select('*').eq('user_id', uid).order('occurred_at', { ascending: false }).limit(10) : Promise.resolve({ data: [], error: null }),
+    role === 'client' ? sb.from('session_ratings').select('booking_id').eq('user_id', uid) : Promise.resolve({ data: [], error: null }),
   ]);
 
   if (!classesRes.error && classesRes.data) DB.classes = classesRes.data.map(mapClass);
@@ -652,6 +658,7 @@ async function loadLiveData(){
     if (!programsRes.error && programsRes.data) DB.programs = programsRes.data.map(mapProgram);
     if (!notifRes.error && notifRes.data) DB.notifications = notifRes.data.map(mapNotif);
     if (!attendanceRes.error && attendanceRes.data) DB.clientAttendance = attendanceRes.data.map(mapAttendance);
+    DB.ratedBookingIds = (!completedRatingsRes.error && completedRatingsRes.data) ? completedRatingsRes.data.map(r => r.booking_id) : [];
   }
   if (isAdminUser) {
     await loadAdminData();
@@ -694,7 +701,7 @@ async function loadTrainerData(){
 
 // يحمّل بيانات لوحة الإدارة (الفريق، الصلاحيات، سجل الحضور، الإحصائيات) — للأدمن فقط
 async function loadAdminData(){
-  const [staffRes, rolesRes, logRes, statsRes, bookingsCountRes, newMembersRes, trainersRes] = await Promise.all([
+  const [staffRes, rolesRes, logRes, statsRes, bookingsCountRes, newMembersRes, trainersRes, trackRequestsRes] = await Promise.all([
     sb.from('staff_members').select('*').order('sort_order'),
     sb.from('access_roles').select('*').order('sort_order'),
     sb.from('attendance_log').select('*').order('occurred_at', { ascending: false }).limit(20),
@@ -702,12 +709,22 @@ async function loadAdminData(){
     sb.from('bookings').select('id', { count: 'exact', head: true }).eq('status', 'مؤكد'),
     sb.from('profiles').select('id', { count: 'exact', head: true }).gte('created_at', new Date(Date.now() - 7*24*60*60*1000).toISOString()),
     sb.from('profiles').select('id, full_name').eq('role', 'trainer').order('full_name'),
+    sb.from('track_change_requests').select('*').order('created_at', { ascending: false }),
   ]);
 
   if (!staffRes.error && staffRes.data) DB.staff = staffRes.data.map(mapStaff);
   if (!rolesRes.error && rolesRes.data) DB.roles = rolesRes.data.map(mapRole);
   if (!logRes.error && logRes.data) DB.attendanceLog = logRes.data.map(mapAttendance);
-  DB.trainers = (!trainersRes.error && trainersRes.data) ? trainersRes.data.map(t=>t.full_name).filter(Boolean) : [];
+  DB.trainerProfiles = (!trainersRes.error && trainersRes.data) ? trainersRes.data.filter(t => t.full_name) : [];
+  DB.trainers = DB.trainerProfiles.map(t => t.full_name);
+  if (!trackRequestsRes.error && trackRequestsRes.data) {
+    const clientIds = [...new Set(trackRequestsRes.data.map(request => request.user_id))];
+    const { data: clientProfiles } = clientIds.length
+      ? await sb.from('profiles').select('id, full_name').in('id', clientIds)
+      : { data: [] };
+    const nameById = Object.fromEntries((clientProfiles || []).map(profile => [profile.id, profile.full_name]));
+    DB.trackChangeRequests = trackRequestsRes.data.map(request => mapTrackChangeRequest(request, nameById[request.user_id]));
+  }
 
   const s = (!statsRes.error && statsRes.data) ? statsRes.data : null;
   DB.attendanceTrend = s ? (s.attendance_trend || []) : [];
@@ -870,7 +887,7 @@ async function toggleBooking(classId){
     } else {
       const { error } = await sb.from('bookings').insert({
         user_id: state.authUser.id, class_id: c.id, title: c.name,
-        booking_date: c.day, booking_time: c.time, trainer_name: c.trainer, status: 'مؤكد'
+        booking_date: c.day, booking_time: c.time, trainer_name: c.trainer, trainer_id: c.trainerId || null, status: 'مؤكد'
       });
       if (error) {
         // 23505 = محاولة حجز مكرر لنفس الكلاس (تحمي منها قاعدة البيانات) — نتجاهلها بهدوء ونحدّث الحالة فقط
@@ -977,8 +994,9 @@ function openRatingSheet(bookingId){
 window.openRatingSheet = openRatingSheet;
 
 async function rateSession(bookingId, stars){
+  if (DB.ratedBookingIds.includes(bookingId)) { toast('تم تقييم هذه الجلسة مسبقاً'); closeSheet(); return; }
   const { error } = await sb.rpc('submit_session_rating', { p_booking_id: bookingId, p_stars: stars });
-  if (error) { toast('حدث خطأ: ' + error.message); return; }
+  if (error) { toast(error.message && error.message.includes('تم تقييم') ? 'تم تقييم هذه الجلسة مسبقاً' : 'حدث خطأ: ' + error.message); return; }
   toast('شكراً لتقييمك!');
   closeSheet();
   await loadLiveData();
@@ -1062,16 +1080,18 @@ async function saveClass(){
   const branch = document.getElementById('cls-branch').value;
   const day = document.getElementById('cls-day').value;
   const timeRaw = document.getElementById('cls-time').value;
-  const trainer = document.getElementById('cls-trainer').value;
+  const trainerId = document.getElementById('cls-trainer').value;
+  const trainerProfile = (DB.trainerProfiles || []).find(profile => profile.id === trainerId);
+  const trainer = trainerProfile ? trainerProfile.full_name : '';
   const capacity = Number(document.getElementById('cls-capacity').value) || 16;
-  if(!name || !timeRaw){ toast('الرجاء تعبئة اسم الصف الرياضي والوقت'); return; }
+  if(!name || !timeRaw || !trainerId){ toast('الرجاء تعبئة اسم الصف الرياضي والوقت وتحديد المدربة'); return; }
   if (timeRaw < '08:00' || timeRaw > '20:00') { toast('الوقت يجب أن يكون ضمن أوقات العمل الرسمية: 8:00 ص — 8:00 م'); return; }
   const time = formatTimeAr(timeRaw);
   const editing = state.editingClass;
 
   const { error } = editing
-    ? await sb.from('classes').update({ name, trainer_name: trainer, day, time, capacity, branch }).eq('id', editing.id)
-    : await sb.from('classes').insert({ name, type:'عام', trainer_name: trainer, day, time, duration:'45 د', capacity, location:'الصالة الرئيسية', branch });
+    ? await sb.from('classes').update({ name, trainer_name: trainer, trainer_id: trainerId || null, day, time, capacity, branch }).eq('id', editing.id)
+    : await sb.from('classes').insert({ name, type:'عام', trainer_name: trainer, trainer_id: trainerId || null, day, time, duration:'45 د', capacity, location:'الصالة الرئيسية', branch });
 
   if (error) { toast('حدث خطأ: ' + error.message); return; }
   toast(editing ? 'تم تحديث الصف الرياضي' : 'تمت إضافة الصف الرياضي للجدول');
@@ -1446,6 +1466,7 @@ function screenResetPassword(){
 // =========================================================
 function screenClientHome(){
   const u = DB.users.client;
+  const track = clientTrack();
   const upcoming = DB.bookings.filter(b=>b.status==='مؤكد');
   return `<div class="view">
     ${topBar('أهلاً، ' + u.name.split(' ')[0] + ' 👋', 'نتمنى لك تمريناً موفقاً اليوم')}
@@ -1453,7 +1474,7 @@ function screenClientHome(){
     <div class="hero-card">
       <div class="hero-top">
         <div>
-          <div class="chip">${icon('bolt')} ${u.membership.track}</div>
+          <div class="chip">${icon('bolt')} ${escapeHtml(track)}</div>
           <div style="font-size:12px;margin-top:8px;opacity:.9;">عضوية دائمة ضمن الأكاديمية · بدون رسوم</div>
         </div>
         <div class="avatar">${u.initials}</div>
@@ -1673,13 +1694,14 @@ function screenDataExplorer(){
 
 function screenClientProfile(){
   const u = DB.users.client;
+  const track = clientTrack();
   return `<div class="view">
     ${backBar('ملفي الشخصي','client-more')}
     <div class="card" style="text-align:center;">
       <div class="avatar" style="width:64px;height:64px;font-size:20px;background:var(--surface-sunken);color:var(--brand-700);border-color:var(--border);margin:0 auto 10px;">${u.initials}</div>
       <div style="font-weight:800;font-size:16px;">${u.name}</div>
       <div style="font-size:12px;color:var(--ink-500);margin-top:2px;">عضوة منذ مايو 2026</div>
-      <div style="margin-top:10px;"><span class="badge badge-green">${u.membership.track}</span></div>
+      <div style="margin-top:10px;"><span class="badge badge-green">${escapeHtml(track)}</span></div>
     </div>
 
     <div class="section-title"><h3>المعلومات الأساسية</h3><span class="link" onclick="openEditProfileSheet()">تعديل</span></div>
@@ -1781,11 +1803,12 @@ function screenClientPrograms(){
 
 function screenClientSubscription(){
   const u = DB.users.client;
+  const track = clientTrack();
   return `<div class="view">
     ${topBar('عضويتي', 'عضوية مجانية ضمن أكاديمية التعلم')}
     <div class="hero-card">
       <div class="hero-top">
-        <div><div style="font-size:13px;opacity:.85;">مسارك التدريبي</div><div style="font-size:19px;font-weight:800;margin-top:2px;">${u.membership.track}</div></div>
+        <div><div style="font-size:13px;opacity:.85;">مسارك التدريبي</div><div style="font-size:19px;font-weight:800;margin-top:2px;">${escapeHtml(track)}</div></div>
         <span class="chip">${icon('check')} فعّال</span>
       </div>
       <div style="margin-top:14px;background:rgba(255,255,255,.14);border-radius:12px;padding:10px 12px;font-size:12px;line-height:1.8;">
@@ -1802,11 +1825,11 @@ function screenClientSubscription(){
     <div class="section-title" id="tracks-sec"><h3>المسارات التدريبية في الأكاديمية</h3></div>
     ${DB.tracks.map(t=>`
       <div class="card" style="margin-bottom:10px; ${t.highlight?'border-color:var(--brand-500);box-shadow:0 0 0 2px rgba(34,168,102,.15);':''}">
-        <div style="font-weight:800;font-size:15px;">${t.name} ${t.id===DB.tracks.find(x=>x.name===u.membership.track)?.id || t.name===u.membership.track ?'<span class="badge badge-green" style="margin-right:6px;">مسارك الحالي</span>':''}</div>
+        <div style="font-weight:800;font-size:15px;">${t.name} ${t.name===track ?'<span class="badge badge-green" style="margin-right:6px;">مسارك الحالي</span>':''}</div>
         <div style="margin-top:10px;">
           ${t.features.map(f=>`<div style="font-size:12px;color:var(--ink-700);display:flex;align-items:center;gap:6px;margin-top:5px;">${icon('check')} ${f}</div>`).join('')}
         </div>
-        ${t.name!==u.membership.track ? `<button class="btn btn-outline" style="margin-top:12px;" onclick="joinTrack('${t.id}')">طلب التحويل لهذا المسار</button>` : ''}
+        ${t.name!==track ? `<button class="btn btn-outline" style="margin-top:12px;" onclick="joinTrack('${t.id}')">طلب التحويل لهذا المسار</button>` : ''}
       </div>`).join('')}
 
     <div class="section-title"><h3>سجل الحضور والإنجاز</h3><span class="link" onclick="go('client-history')">عرض الكل</span></div>
@@ -1823,7 +1846,7 @@ function screenClientHistory(){
     ${!DB.bookings.length ? emptyState('لا يوجد سجل حجوزات بعد') : `<div class="card">
       ${DB.bookings.map(b=>`
         <div class="list-row"><span class="list-icon">${icon(b.status==='ملغي'?'x':'check')}</span><span class="meta"><b>${b.title}</b><span>${b.date} · ${b.time} · ${b.trainer}</span></span>
-        ${b.status==='منتهي' ? `<button class="btn btn-outline btn-sm" onclick="openRatingSheet('${b.id}')">${icon('star')} تقييم</button>` : `<span class="badge ${b.status==='مؤكد'?'badge-green':'badge-red'}">${b.status}</span>`}</div>`).join('')}
+        ${b.status==='منتهي' ? (DB.ratedBookingIds.includes(b.id) ? '<span class="badge badge-green">تم التقييم</span>' : `<button class="btn btn-outline btn-sm" onclick="openRatingSheet('${b.id}')">${icon('star')} تقييم</button>`) : `<span class="badge ${b.status==='مؤكد'?'badge-green':'badge-red'}">${b.status}</span>`}</div>`).join('')}
     </div>`}
   </div>`;
 }
@@ -1878,13 +1901,14 @@ function screenClientNotifications(){
 
 function screenClientCheckin(){
   const u = DB.users.client;
+  const track = clientTrack();
   const attendance = DB.clientAttendance || [];
   return `<div class="view" style="text-align:center;">
     ${topBar('الدخول والخروج', 'اعرض الرمز عند البوابة لتسجيل الحضور')}
     <div class="card" style="padding:26px;">
       <div class="qr-wrap" style="margin:0 auto;width:fit-content;">${qrSvg(u.qr,190)}</div>
       <div style="margin-top:14px;font-weight:800;">${u.name}</div>
-      <div style="font-size:12px;color:var(--ink-500);">${u.membership.track} · ${icon('check')} عضوية فعّالة</div>
+      <div style="font-size:12px;color:var(--ink-500);">${escapeHtml(track)} · ${icon('check')} عضوية فعّالة</div>
     </div>
     <button class="btn btn-primary" style="margin-top:16px;" onclick="recordMyAttendance()">${icon('scan')} تسجيل دخول / خروج</button>
     <div class="section-title" style="text-align:right;"><h3>آخر مرات الحضور</h3></div>
@@ -1935,7 +1959,7 @@ function screenTrainerHome(){
   const trainerName = p.full_name || DB.users.trainer.name;
   const mySlots = DB.privateSlots.filter(s => s.trainer === trainerName);
   const myClasses = DB.classes.filter(c => c.trainer === trainerName);
-  const myRating = DB.trainerRatings.find(r => r.trainer === trainerName) || { avg:'—', count:0 };
+  const myRating = DB.trainerRatings.find(r => r.trainerId === state.authUser?.id) || { avg:'—', count:0 };
   const requests = DB.inbodyRequests || [];
   return `<div class="view">
     ${topBar('جدولي', trainerName)}
@@ -1993,8 +2017,7 @@ function screenTrainerClients(){
 
 function screenTrainerRatings(){
   const p = state.authProfile || {};
-  const trainerName = p.full_name || DB.users.trainer.name;
-  const me = DB.trainerRatings.find(r=>r.trainer===trainerName) || { avg:0, count:0 };
+  const me = DB.trainerRatings.find(r => r.trainerId === state.authUser?.id) || { avg:0, count:0 };
   return `<div class="view">
     ${topBar('تقييماتي', 'آراء المتدربات حول جلساتك')}
     <div class="card" style="text-align:center;">
@@ -2030,6 +2053,7 @@ function screenAdminDashboard(){
       <button class="stat-box" style="text-align:right;" onclick="go('admin-offers')"><span class="list-icon" style="margin-bottom:8px;">${icon('megaphone')}</span><div class="n" style="font-size:13px;">العروض والإشعارات</div></button>
       <button class="stat-box" style="text-align:right;" onclick="go('admin-checkin')"><span class="list-icon" style="margin-bottom:8px;">${icon('qr')}</span><div class="n" style="font-size:13px;">سجل الحضور</div></button>
       <button class="stat-box" style="text-align:right;" onclick="go('admin-support')"><span class="list-icon" style="margin-bottom:8px;">${icon('support')}</span><div class="n" style="font-size:13px;">تذاكر الدعم</div></button>
+      <button class="stat-box" style="text-align:right;" onclick="go('admin-track-requests')"><span class="list-icon" style="margin-bottom:8px;">${icon('wallet')}</span><div class="n" style="font-size:13px;">طلبات تغيير المسار</div></button>
       <button class="stat-box" style="text-align:right;" onclick="openDataExplorer('admin-dashboard')"><span class="list-icon" style="margin-bottom:8px;">${icon('chart')}</span><div class="n" style="font-size:13px;">مستكشف البيانات</div></button>
     </div>
 
@@ -2090,7 +2114,7 @@ function parseTimeToHHMM(arTime){
 
 function screenAdminClassesNew(){
   const editing = state.editingClass;
-  const trainers = (DB.trainers && DB.trainers.length) ? DB.trainers : (editing && editing.trainer ? [editing.trainer] : []);
+  const trainers = (DB.trainerProfiles && DB.trainerProfiles.length) ? DB.trainerProfiles : (editing && editing.trainer ? [{ id:editing.trainerId || '', full_name:editing.trainer }] : []);
   return `<div class="view">
     ${backBar(editing ? 'تعديل الصف الرياضي' : 'إضافة صف رياضي جديد','admin-classes')}
     <div class="field"><label>اسم الصف الرياضي</label><input id="cls-name" placeholder="مثال: يوغا مسائية" value="${editing?editing.name:''}" /></div>
@@ -2099,7 +2123,7 @@ function screenAdminClassesNew(){
     <div class="field"><label>الوقت</label><input type="time" id="cls-time" min="08:00" max="20:00" value="${editing?parseTimeToHHMM(editing.time):''}" /><div class="muted" style="margin-top:4px;">أوقات العمل الرسمية: 8:00 ص — 8:00 م</div></div>
     <div class="field"><label>المدربة</label>
       <select id="cls-trainer">
-        ${trainers.length ? trainers.map(t=>`<option ${editing&&editing.trainer===t?'selected':''}>${t}</option>`).join('') : '<option value="">لا توجد مدربات مسجلات بعد</option>'}
+        ${trainers.length ? trainers.map(t=>`<option value="${escapeHtml(t.id)}" ${editing&&editing.trainerId===t.id?'selected':''}>${escapeHtml(t.full_name)}</option>`).join('') : '<option value="">لا توجد مدربات مسجلات بعد</option>'}
       </select>
     </div>
     <div class="field"><label>السعة القصوى</label><input type="number" id="cls-capacity" placeholder="16" value="${editing?editing.capacity:16}" /></div>
@@ -2168,6 +2192,38 @@ function screenAdminReports(){
     <div class="card">
       ${emptyState('لا توجد تقارير مؤرشفة بعد')}
     </div>
+  </div>`;
+}
+
+async function reviewTrackChange(requestId, approve){
+  if (state.authProfile?.role !== 'admin') {
+    toast('لا تملك صلاحية مراجعة طلبات تغيير المسار');
+    return;
+  }
+  const { error } = await sb.rpc('review_track_change', { p_request_id: requestId, p_approve: approve });
+  if (error) { toast('حدث خطأ: ' + error.message); return; }
+  toast(approve ? 'تم اعتماد تغيير المسار' : 'تم رفض طلب تغيير المسار');
+  await loadLiveData();
+  render();
+}
+window.reviewTrackChange = reviewTrackChange;
+
+function screenAdminTrackRequests(){
+  const requests = DB.trackChangeRequests || [];
+  const pendingCount = requests.filter(request => request.status === 'pending').length;
+  const statusLabel = { pending:'قيد المراجعة', approved:'تم الاعتماد', rejected:'مرفوض' };
+  const statusClass = { pending:'badge-orange', approved:'badge-green', rejected:'badge-red' };
+  return `<div class="view">
+    ${backBar('طلبات تغيير المسار', 'admin-dashboard')}
+    <div class="muted" style="margin-bottom:12px;">${pendingCount} طلب بانتظار قرار الإدارة</div>
+    ${requests.length ? requests.map(request => `
+      <div class="card" style="margin-bottom:10px;">
+        <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:10px;">
+          <span class="meta"><b>${escapeHtml(request.fullName)}</b><span>طلب التحويل إلى ${escapeHtml(request.trackName)} · ${escapeHtml(request.date)}</span></span>
+          <span class="badge ${statusClass[request.status] || 'badge-gray'}">${statusLabel[request.status] || request.status}</span>
+        </div>
+        ${request.status === 'pending' ? `<div class="btn-row" style="margin-top:12px;"><button class="btn btn-primary btn-sm" onclick="reviewTrackChange('${request.id}', true)">${icon('check')} اعتماد</button><button class="btn btn-danger-ghost btn-sm" onclick="reviewTrackChange('${request.id}', false)">${icon('x')} رفض</button></div>` : ''}
+      </div>`).join('') : emptyState('لا توجد طلبات تغيير مسار حتى الآن')}
   </div>`;
 }
 
@@ -2423,6 +2479,7 @@ const SCREENS = {
   'admin-classes-new': screenAdminClassesNew,
   'admin-offers': screenAdminOffers,
   'admin-reports': screenAdminReports,
+  'admin-track-requests': screenAdminTrackRequests,
   'admin-checkin': screenAdminCheckin,
   'admin-support': screenAdminSupport,
   'admin-permissions': screenAdminPermissions,
